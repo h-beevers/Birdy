@@ -25,6 +25,31 @@ into its own thing.
 
 ## Setup
 
+### The easy way: Birdy.exe (recommended for most people)
+
+No Python install, no editing config files by hand. Grab the latest
+`Birdy.exe` from the [Releases page](../../releases), put it in a permanent
+folder (e.g. `Documents\Birdy`), and double-click it.
+
+The first launch runs a short one-time setup: it asks for your postcode and
+offers to register the 15-minute auto-refresh for you (see
+[Running it automatically](#running-it-automatically) — this does that step
+for you via `schtasks`, no manual Task Scheduler work needed). It also seeds
+an `Illustrations/` folder next to the exe with this repo's bundled bird art,
+which you can add your own images to at any time (see below). Every later
+double-click (or scheduled run) just refreshes the wallpaper silently — no
+window, no prompts.
+
+Settings after first-run live in `config.ini` next to the exe if you want to
+change your postcode or search radius later; delete it to rerun the setup
+wizard.
+
+New builds are produced automatically by
+[the build workflow](.github/workflows/build-exe.yml) whenever a version tag
+is pushed, and attached to that release — nothing to build yourself.
+
+### Running from source (for development, or if you'd rather not run a downloaded exe)
+
 ```
 pip install -r requirements.txt
 ```
@@ -73,8 +98,13 @@ accuracy — worth doing for anything with distinctive field marks.
 
 ## Running it automatically
 
-Set it up as a Windows Scheduled Task so your wallpaper refreshes on its
-own:
+**If you're using Birdy.exe**, the first-run setup wizard offers to do all
+of this for you — just say yes when it asks. Nothing below is needed unless
+you said no then and want it later, or want to change/remove it (Task
+Scheduler → look for "Birdy Wallpaper Refresh").
+
+**If you're running from source**, set it up as a Windows Scheduled Task by
+hand so your wallpaper refreshes on its own:
 
 - **Trigger:** Daily, repeat every 15 minutes, indefinitely
 - **Action:** Program/script → `pythonw.exe` (not `python.exe` — avoids a
@@ -88,17 +118,21 @@ own:
 - **`pythonw.exe` has no console**, so `sys.stdout`/`stderr` are `None`
   rather than writable — the script redirects to `birdweather_local.log`
   automatically when it detects this, so `print()` calls don't crash.
+  `Birdy.exe` is built the same way (`--windowed`) and hits the same log
+  redirect, next to the exe.
 - **Controlled Folder Access** (Windows Security → Ransomware protection)
-  can silently block a script from writing new files in Documents-adjacent
-  folders. If runs fail with a `PermissionError` on a brand-new `.tmp` file
-  (not an existing one), this is almost certainly why — allow `python.exe`
-  **and** `pythonw.exe` separately, since Defender treats them as different
-  programs even though they live in the same folder.
+  can silently block writes to new files in Documents-adjacent folders. If
+  runs fail with a `PermissionError` on a brand-new `.tmp` file (not an
+  existing one), this is almost certainly why — allow `python.exe` **and**
+  `pythonw.exe` separately when running from source (Defender treats them as
+  different programs even though they live in the same folder), or allow
+  `Birdy.exe` if you're using the packaged build.
 - **`where python` can lie** if another tool's venv has planted itself
   ahead of your real install on PATH. Use `py -0p` (Python launcher) or
   `(Get-Command python).Source` in PowerShell to confirm which interpreter
   you're actually running, and use its full path in Task Scheduler rather
-  than the bare command.
+  than the bare command. (Not a concern for `Birdy.exe` — nothing to
+  resolve on PATH.)
 
 ## How the collage layout works
 
