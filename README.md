@@ -113,27 +113,6 @@ hand so your wallpaper refreshes on its own:
 - **Security options:** "Run only when user is logged on" is simplest and
   sufficient — this only needs to run while you're actually at the desktop
 
-### Windows gotchas that bit us building this
-
-- **`pythonw.exe` has no console**, so `sys.stdout`/`stderr` are `None`
-  rather than writable — the script redirects to `birdweather_local.log`
-  automatically when it detects this, so `print()` calls don't crash.
-  `Birdy.exe` is built the same way (`--windowed`) and hits the same log
-  redirect, next to the exe.
-- **Controlled Folder Access** (Windows Security → Ransomware protection)
-  can silently block writes to new files in Documents-adjacent folders. If
-  runs fail with a `PermissionError` on a brand-new `.tmp` file (not an
-  existing one), this is almost certainly why — allow `python.exe` **and**
-  `pythonw.exe` separately when running from source (Defender treats them as
-  different programs even though they live in the same folder), or allow
-  `Birdy.exe` if you're using the packaged build.
-- **`where python` can lie** if another tool's venv has planted itself
-  ahead of your real install on PATH. Use `py -0p` (Python launcher) or
-  `(Get-Command python).Source` in PowerShell to confirm which interpreter
-  you're actually running, and use its full path in Task Scheduler rather
-  than the bare command. (Not a concern for `Birdy.exe` — nothing to
-  resolve on PATH.)
-
 ## How the collage layout works
 
 Loosely based on the approach described in AvianVisitors' own writeup:
@@ -144,6 +123,36 @@ swallowing the whole layout), packed center-out in a spiral with real
 per-pixel silhouette collision (not just bounding boxes, so tiles can nest
 into each other's negative space), and a shrink-and-repack fallback if
 anything lands off-canvas.
+
+## Troubleshooting
+
+Nothing here needs doing up front — only look if you actually hit one of
+these.
+
+**Runs fail with a `PermissionError` on a brand-new `.tmp` file** (not an
+existing one): this is almost always Windows Security's *Controlled Folder
+Access* (Windows Security → Virus & threat protection → Ransomware
+protection), which can silently block a program from writing new files in
+Documents-adjacent folders. Fix: add an allowed app there — `Birdy.exe`
+itself if you're using the packaged build, or **both** `python.exe` *and*
+`pythonw.exe` separately if running from source (Defender treats them as
+different programs even though they live in the same folder). It's off by
+default on most installs, so most people will never see this.
+
+**Nothing happens / no log file appears when running from source via
+`pythonw.exe`**: it has no console, so `sys.stdout`/`stderr` are `None`
+rather than writable streams — the script detects this and redirects
+`print()` output to `birdweather_local.log` next to it instead of crashing.
+Check there first. (`Birdy.exe` is built the same way and behaves
+identically, logging beside itself.)
+
+**Task Scheduler runs a different Python than the one you tested with (from
+source only)**: `where python` can lie if another tool's venv has planted
+itself ahead of your real install on PATH. Use `py -0p` (Python launcher) or
+`(Get-Command python).Source` in PowerShell to confirm which interpreter
+you're actually running, and point Task Scheduler at its full path rather
+than the bare command. Not a concern for `Birdy.exe` — there's no PATH
+resolution involved.
 
 ## Credits / attribution
 
