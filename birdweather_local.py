@@ -682,14 +682,21 @@ def cutout_illustration(img, tolerance=32, max_dim=420):
     return rgba
 
 
-def add_drop_shadow(canvas, cutout, x, y, opacity=70):
+def add_drop_shadow(canvas, cutout, x, y, opacity=32):
     """Soft ambient shadow, scaled to the bird's own size so small and large
     tiles both read as a blurred shadow rather than a crisp offset outline
     (a fixed blur/offset in pixels looks fine on small tiles but turns into
-    a hard-edged 'double' silhouette on the larger, count-weighted ones)."""
+    a hard-edged 'double' silhouette on the larger, count-weighted ones).
+
+    Kept deliberately light: birds are packed edge-to-edge with only a
+    sliver of collision margin between them (collision testing is done on
+    the bare silhouette, not the shadow-extended one), so a strong shadow
+    routinely bleeds onto whichever neighbour got placed next door,
+    muddying the seam between them. A lighter, tighter shadow keeps the
+    grounding effect without visibly darkening the bird beside it."""
     size = min(cutout.size)
-    blur = max(6, size * 0.05)
-    offset = (max(3, round(size * 0.02)), max(5, round(size * 0.035)))
+    blur = max(5, size * 0.035)
+    offset = (max(2, round(size * 0.012)), max(3, round(size * 0.022)))
     shadow_alpha = cutout.split()[-1].point(lambda p: opacity if p > 0 else 0)
     shadow = Image.new("RGBA", cutout.size, (20, 15, 10, 0))
     shadow.putalpha(shadow_alpha)
