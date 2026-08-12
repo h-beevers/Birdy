@@ -1,0 +1,13 @@
+# Generated output — regenerated on every run, not source
+birdweather_snapshot.html
+birdweather_snapshot.html.tmp
+birdweather_wallpaper.jpg
+birdweather_local.log
+species_for_illustrations.txt
+
+__pycache__/
+*.pyc
+
+# Your generated bird illustrations are tracked by default (Illustrations/).
+# If you'd rather not commit binary image files to the repo, uncomment:
+# Illustrations/
