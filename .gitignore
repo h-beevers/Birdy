@@ -4,9 +4,16 @@ birdweather_snapshot.html.tmp
 birdweather_wallpaper.jpg
 birdweather_local.log
 species_for_illustrations.txt
+config.ini
 
 __pycache__/
 *.pyc
+
+# PyInstaller build output — Birdy.exe itself is attached to GitHub Releases
+# by the build workflow, not committed here.
+build/
+dist/
+*.spec.bak
 
 # Your generated bird illustrations are tracked by default (Illustrations/).
 # If you'd rather not commit binary image files to the repo, uncomment:

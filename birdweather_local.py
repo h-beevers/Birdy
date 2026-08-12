@@ -24,11 +24,15 @@ script does NOT pull illustrations from the AvianVisitors GitHub repo, to
 keep things simple and avoid getting the CC-BY-NC-SA attribution wrong.
 """
 
+import configparser
 import json
 import math
 import os
 import re
+import shutil
 import base64
+import subprocess
+import sys
 import textwrap
 import urllib.request
 import urllib.error
@@ -45,18 +49,73 @@ except ImportError:
 import random
 
 # ---------------------------------------------------------------------------
-# CONFIG — edit these
+# CONFIG
 # ---------------------------------------------------------------------------
+# When run from source, everything below is edited directly in this file, as
+# before. When run as the packaged Birdy.exe, the handful of per-user
+# settings (postcode, radius, days) instead live in config.ini next to the
+# exe — created by a one-time setup wizard on first launch, so nothing here
+# needs editing at all. See app_dir()/resource_path()/load_user_config().
 
-POSTCODE = "HG3 1AP"          # Set to your postcode (e.g. "HG3 1AB"), or set to None
-FALLBACK_LAT = 53.93      # Used if POSTCODE is None or the lookup fails
-FALLBACK_LON = -1.45      # (Spofforth, North Yorkshire — edit for your location)
+FROZEN = getattr(sys, "frozen", False)
 
-RADIUS_KM = 20            # How far around the point to search
-DAYS = 1                  # How many days of detections to pull
+
+def app_dir():
+    """Directory the exe/script lives in — where config.ini, the log, the
+    rendered wallpaper, and a user Illustrations/ folder should live.
+    Deliberately NOT the same as resource_path()'s temp extraction dir."""
+    if FROZEN:
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def resource_path(*parts):
+    """Path to a bundled read-only resource (e.g. the default Illustrations/
+    shipped inside the exe via PyInstaller --add-data). Falls back to the
+    source tree when not frozen."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *parts)
+
+
+CONFIG_PATH = os.path.join(app_dir(), "config.ini")
+
+# Defaults used both as the source-run fallback and as the config.ini
+# scaffold the setup wizard writes on first launch.
+_DEFAULTS = {
+    "postcode": "HG3 1AP",
+    "fallback_lat": "53.93",
+    "fallback_lon": "-1.45",
+    "radius_km": "20",
+    "days": "1",
+}
+
+
+def load_user_config():
+    parser = configparser.ConfigParser()
+    parser["birdy"] = dict(_DEFAULTS)
+    if os.path.exists(CONFIG_PATH):
+        parser.read(CONFIG_PATH)
+    return parser["birdy"]
+
+
+def save_user_config(values):
+    parser = configparser.ConfigParser()
+    parser["birdy"] = {**_DEFAULTS, **values}
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        parser.write(f)
+
+
+_cfg = load_user_config()
+
+POSTCODE = _cfg.get("postcode") or None   # Set to None to use fallback lat/lon
+FALLBACK_LAT = _cfg.getfloat("fallback_lat")
+FALLBACK_LON = _cfg.getfloat("fallback_lon")  # (Spofforth, North Yorkshire by default)
+
+RADIUS_KM = _cfg.getint("radius_km")   # How far around the point to search
+DAYS = _cfg.getint("days")             # How many days of detections to pull
 MAX_SPECIES_CARDS = 40    # Cap on how many species cards to render (HTML view)
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = app_dir()
 
 # Folder of your own locally-generated illustrations (e.g. Gemini/Comfy
 # output). Filenames just need to loosely match the species' common name —
@@ -68,7 +127,7 @@ ILLUSTRATIONS_DIR = os.path.join(SCRIPT_DIR, "Illustrations")
 # Render a JPG and set it as the actual Windows desktop wallpaper directly —
 # no Lively involved. Requires: pip install Pillow
 SET_DESKTOP_WALLPAPER = True
-OUTPUT_IMAGE = "birdweather_wallpaper.jpg"
+OUTPUT_IMAGE = os.path.join(SCRIPT_DIR, "birdweather_wallpaper.jpg")
 # Leave as None to auto-detect your screen resolution.
 IMAGE_WIDTH = None
 IMAGE_HEIGHT = None
@@ -76,12 +135,100 @@ IMAGE_HEIGHT = None
 # (unlabelled flock) has this off by default.
 SHOW_LABELS = False
 
-OUTPUT_FILE = "birdweather_snapshot.html"
+OUTPUT_FILE = os.path.join(SCRIPT_DIR, "birdweather_snapshot.html")
 
 POSTCODES_API = "https://api.postcodes.io/postcodes/{}"
 BIRDWEATHER_GRAPHQL = "https://app.birdweather.com/graphql"
 
 # ---------------------------------------------------------------------------
+# First-run setup (packaged Birdy.exe only) — everything below this point is
+# skipped entirely for a source run, which keeps editing this file at the top
+# as the supported path for developers.
+# ---------------------------------------------------------------------------
+
+TASK_NAME = "Birdy Wallpaper Refresh"
+
+
+def bootstrap_illustrations():
+    """First launch of the exe: seed a writable Illustrations/ folder next
+    to the exe from the read-only copy bundled inside it, so there's art to
+    render immediately. Never overwrites — once the folder exists it's the
+    user's to add to, same as the source-run workflow."""
+    if os.path.exists(ILLUSTRATIONS_DIR):
+        return
+    bundled = resource_path("Illustrations")
+    if os.path.isdir(bundled):
+        shutil.copytree(bundled, ILLUSTRATIONS_DIR)
+    else:
+        os.makedirs(ILLUSTRATIONS_DIR, exist_ok=True)
+
+
+def register_scheduled_task():
+    """Registers (or replaces) a Windows Scheduled Task that reruns this
+    same exe every 15 minutes, indefinitely, only while logged on — the
+    setup this project's README always recommended doing by hand."""
+    exe = os.path.abspath(sys.executable)
+    subprocess.run(["schtasks", "/Create", "/F",
+                     "/SC", "MINUTE", "/MO", "15",
+                     "/TN", TASK_NAME,
+                     "/TR", f'"{exe}"'],
+                    check=True, capture_output=True, text=True)
+
+
+def run_first_time_setup():
+    """Tkinter wizard shown once, the first time Birdy.exe runs (i.e. no
+    config.ini next to it yet). Asks just the two things a source-run user
+    would otherwise edit at the top of this file — postcode and whether to
+    auto-refresh — then gets out of the way; every later launch is silent."""
+    import tkinter as tk
+    from tkinter import messagebox, simpledialog
+
+    root = tk.Tk()
+    root.withdraw()
+
+    messagebox.showinfo(
+        "Welcome to Birdy",
+        "Birdy turns recent local bird sightings into your desktop "
+        "wallpaper. Quick one-time setup, then it runs on its own.")
+
+    postcode = simpledialog.askstring(
+        "Birdy setup",
+        "Your postcode (used only to find nearby BirdWeather stations —\n"
+        "never sent anywhere except the free postcodes.io lookup):",
+        initialvalue=_DEFAULTS["postcode"])
+    if postcode is None:
+        postcode = ""
+    postcode = postcode.strip()
+
+    values = {"postcode": postcode}
+    save_user_config(values)
+
+    auto = messagebox.askyesno(
+        "Birdy setup",
+        "Refresh your wallpaper automatically every 15 minutes?\n\n"
+        "This adds a Windows Scheduled Task named "
+        f"\"{TASK_NAME}\" that reruns Birdy while you're logged on. "
+        "You can remove it any time from Task Scheduler.")
+    if auto:
+        try:
+            register_scheduled_task()
+            messagebox.showinfo("Birdy setup", "Auto-refresh is set up. "
+                                 "Setting your first wallpaper now...")
+        except Exception as e:
+            messagebox.showwarning(
+                "Birdy setup",
+                f"Couldn't create the scheduled task automatically ({e}).\n"
+                "You can still set it up by hand — see the README — or "
+                "just rerun Birdy.exe whenever you want a fresh wallpaper.")
+    else:
+        messagebox.showinfo("Birdy setup", "Setting your first wallpaper now. "
+                             "Rerun Birdy.exe any time you want a fresh one — "
+                             "see the README if you'd like it automatic.")
+
+    root.destroy()
+
+    global POSTCODE
+    POSTCODE = postcode or None
 
 
 def http_post_json(url, payload, headers=None):
@@ -535,7 +682,21 @@ def cutout_illustration(img, tolerance=32, max_dim=420):
     return rgba
 
 
-def add_drop_shadow(canvas, cutout, x, y, blur=6, offset=(4, 6), opacity=90):
+def add_drop_shadow(canvas, cutout, x, y, opacity=32):
+    """Soft ambient shadow, scaled to the bird's own size so small and large
+    tiles both read as a blurred shadow rather than a crisp offset outline
+    (a fixed blur/offset in pixels looks fine on small tiles but turns into
+    a hard-edged 'double' silhouette on the larger, count-weighted ones).
+
+    Kept deliberately light: birds are packed edge-to-edge with only a
+    sliver of collision margin between them (collision testing is done on
+    the bare silhouette, not the shadow-extended one), so a strong shadow
+    routinely bleeds onto whichever neighbour got placed next door,
+    muddying the seam between them. A lighter, tighter shadow keeps the
+    grounding effect without visibly darkening the bird beside it."""
+    size = min(cutout.size)
+    blur = max(5, size * 0.035)
+    offset = (max(2, round(size * 0.012)), max(3, round(size * 0.022)))
     shadow_alpha = cutout.split()[-1].point(lambda p: opacity if p > 0 else 0)
     shadow = Image.new("RGBA", cutout.size, (20, 15, 10, 0))
     shadow.putalpha(shadow_alpha)
@@ -857,22 +1018,25 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
     import traceback
 
-    # pythonw.exe has no console, so sys.stdout/stderr are None rather than
-    # writable streams. Redirect to a log file in that case so print() calls
-    # don't crash, and so you can still see what happened after the fact.
+    # pythonw.exe (source run) and the packaged --windowed exe both have no
+    # console, so sys.stdout/stderr are None rather than writable streams.
+    # Redirect to a log file in that case so print() calls don't crash, and
+    # so you can still see what happened after the fact.
     if sys.stdout is None or not hasattr(sys.stdout, "write"):
-        log_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "birdweather_local.log"
-        )
+        log_path = os.path.join(app_dir(), "birdweather_local.log")
         log_file = open(log_path, "a", encoding="utf-8")
         sys.stdout = log_file
         sys.stderr = log_file
         print(f"\n--- Run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
 
     try:
+        if FROZEN:
+            first_run = not os.path.exists(CONFIG_PATH)
+            bootstrap_illustrations()
+            if first_run:
+                run_first_time_setup()
         main()
     except Exception:
         print("\nSomething went wrong — full details below:\n")
