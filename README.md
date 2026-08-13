@@ -15,8 +15,7 @@ existing public station network instead of running your own. It started as
 a "phase 0" preview while waiting on hardware for a proper BirdNET-Pi build,
 and turned into its own thing worth sharing on its own.
 
-<!-- TODO: drop a real screenshot of the rendered wallpaper here, e.g.
-     ![Birdy wallpaper example](docs/example-wallpaper.jpg) -->
+![Birdy wallpaper example](collage_example.webp)
 
 ## What it does
 
