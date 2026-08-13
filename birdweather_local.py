@@ -51,6 +51,7 @@ import sys
 import textwrap
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from datetime import datetime, timezone
 from collections import Counter
@@ -127,26 +128,54 @@ def save_user_config(values):
         parser.write(f)
 
 
-_cfg = load_user_config()
+def load_runtime_config():
+    """Parses config.ini (or the built-in defaults, if it doesn't exist yet)
+    into the module-level settings the rest of the script reads.
 
-POSTCODE = _cfg.get("postcode") or None   # Set to None to use fallback lat/lon
-FALLBACK_LAT = _cfg.getfloat("fallback_lat")
-FALLBACK_LON = _cfg.getfloat("fallback_lon")  # (Spofforth, North Yorkshire by default)
+    Deliberately NOT run at module import time: getint()/getfloat()/
+    getboolean() all raise on a malformed config.ini value, and a bad
+    config.ini is the single most likely failure a non-developer user hits
+    (it's the only file they're ever expected to hand-edit). Called instead
+    from inside __main__'s try/except, after stdout/stderr have already
+    been redirected to the log file — so a bad value now produces a logged,
+    readable error instead of crashing before either safety net exists
+    (silently, for the windowed exe, which has no console to show it on)."""
+    global _cfg, POSTCODE, FALLBACK_LAT, FALLBACK_LON, RADIUS_KM, DAYS
+    global PERIOD_COUNT, PERIOD_UNIT, SHOW_TITLE, TITLE_TEXT, SHOW_LABELS, LABEL_STYLE
 
-RADIUS_KM = _cfg.getint("radius_km")   # How far around the point to search
-DAYS = _cfg.getint("days")             # How many days of detections to pull
+    _cfg = load_user_config()
 
-# `hours` in config.ini overrides `days` with a sub-day window (e.g. "12",
-# "6", "1") — BirdWeather's API takes a {count, unit} duration either way,
-# so this just swaps which unit gets sent instead of bolting on a separate
-# code path. Leave `hours` blank (the default) to use DAYS as before.
-_hours_raw = (_cfg.get("hours") or "").strip()
-if _hours_raw:
-    PERIOD_COUNT = int(_hours_raw)
-    PERIOD_UNIT = "hour"
-else:
-    PERIOD_COUNT = DAYS
-    PERIOD_UNIT = "day"
+    POSTCODE = _cfg.get("postcode") or None   # Set to None to use fallback lat/lon
+    FALLBACK_LAT = _cfg.getfloat("fallback_lat")
+    FALLBACK_LON = _cfg.getfloat("fallback_lon")  # (Spofforth, North Yorkshire by default)
+
+    RADIUS_KM = _cfg.getint("radius_km")   # How far around the point to search
+    DAYS = _cfg.getint("days")             # How many days of detections to pull
+
+    # `hours` in config.ini overrides `days` with a sub-day window (e.g. "12",
+    # "6", "1") — BirdWeather's API takes a {count, unit} duration either way,
+    # so this just swaps which unit gets sent instead of bolting on a separate
+    # code path. Leave `hours` blank (the default) to use DAYS as before.
+    hours_raw = (_cfg.get("hours") or "").strip()
+    if hours_raw:
+        PERIOD_COUNT = int(hours_raw)
+        PERIOD_UNIT = "hour"
+    else:
+        PERIOD_COUNT = DAYS
+        PERIOD_UNIT = "day"
+
+    # Show a title above the collage, and what it reads.
+    SHOW_TITLE = _cfg.getboolean("show_title")
+    TITLE_TEXT = _cfg.get("title_text") or _DEFAULTS["title_text"]
+    # Show a small label under each bird? The reference collage look
+    # (unlabelled flock) has this off by default. label_style picks what the
+    # label shows: "common" (e.g. "Hooded Crow"), "scientific" (e.g. "Corvus
+    # cornix"), or "station" (which BirdWeather station detected it).
+    SHOW_LABELS = _cfg.getboolean("show_labels")
+    LABEL_STYLE = (_cfg.get("label_style") or "common").strip().lower()
+    if LABEL_STYLE not in LABEL_STYLES:
+        LABEL_STYLE = "common"
+
 
 MAX_SPECIES_CARDS = 40    # Cap on how many species cards to render (HTML view)
 
@@ -166,17 +195,6 @@ OUTPUT_IMAGE = os.path.join(SCRIPT_DIR, "birdweather_wallpaper.jpg")
 # Leave as None to auto-detect your screen resolution.
 IMAGE_WIDTH = None
 IMAGE_HEIGHT = None
-# Show a title above the collage, and what it reads.
-SHOW_TITLE = _cfg.getboolean("show_title")
-TITLE_TEXT = _cfg.get("title_text") or _DEFAULTS["title_text"]
-# Show a small label under each bird? The reference collage look
-# (unlabelled flock) has this off by default. label_style picks what the
-# label shows: "common" (e.g. "Hooded Crow"), "scientific" (e.g. "Corvus
-# cornix"), or "station" (which BirdWeather station detected it).
-SHOW_LABELS = _cfg.getboolean("show_labels")
-LABEL_STYLE = (_cfg.get("label_style") or "common").strip().lower()
-if LABEL_STYLE not in LABEL_STYLES:
-    LABEL_STYLE = "common"
 
 OUTPUT_FILE = os.path.join(SCRIPT_DIR, "birdweather_snapshot.html")
 
@@ -916,6 +934,15 @@ def pack_flock(tiles, center_x, center_y, canvas_w, canvas_h, top_margin,
     return placed
 
 
+def _save_wallpaper_atomic(canvas, output_path):
+    """Write via a temp file + rename rather than saving straight to
+    output_path, so nothing (Explorer, a wallpaper viewer, an overlapping
+    scheduled run) can ever read a partially-written JPEG there."""
+    tmp_path = output_path + ".tmp"
+    canvas.save(tmp_path, "JPEG", quality=90)
+    os.replace(tmp_path, output_path)
+
+
 def render_wallpaper_image(species_list, counts, illustration_index, output_path):
     CREAM = (244, 237, 224)
     INK = (46, 38, 32)
@@ -937,27 +964,49 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     birds = species_list[:60]
     n = len(birds)
     if n == 0:
-        canvas.save(output_path, "JPEG", quality=90)
+        _save_wallpaper_atomic(canvas, output_path)
         return output_path
 
-    # Prepare each bird: cutout (local art) or toned photo circle
+    # Prepare each bird: cutout (local art) or toned photo circle.
+    # Thumbnail downloads are the only slow part here (network I/O), so
+    # fetch every needed one concurrently rather than one at a time —
+    # sequentially, a handful of slow/unresponsive hosts could eat the
+    # entire 15-minute interval this is normally scheduled to rerun on.
+    local_cutouts = {}
+    needs_thumb = []
+    for s in birds:
+        local_path = find_local_illustration(s["name"], illustration_index)
+        if local_path:
+            try:
+                local_cutouts[s["name"]] = cutout_illustration(Image.open(local_path))
+                continue
+            except Exception as e:
+                print(f"Cutout failed for {s['name']} ({e}), using thumbnail instead.")
+        if s["thumb"]:
+            needs_thumb.append(s)
+
+    thumb_bytes = {}
+    if needs_thumb:
+        with ThreadPoolExecutor(max_workers=min(8, len(needs_thumb))) as executor:
+            future_to_name = {executor.submit(fetch_image_bytes, s["thumb"]): s["name"]
+                               for s in needs_thumb}
+            for future in as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    thumb_bytes[name] = future.result()
+                except Exception as e:
+                    print(f"Couldn't fetch thumbnail for {name}: {e}")
+
     tiles = []
     for s in birds:
         rnd = random.Random(s["name"])  # stable per species across runs
-        local_path = find_local_illustration(s["name"], illustration_index)
-        cutout = None
-        if local_path:
+        cutout = local_cutouts.get(s["name"])
+        if cutout is None and s["name"] in thumb_bytes:
             try:
-                cutout = cutout_illustration(Image.open(local_path))
-            except Exception as e:
-                print(f"Cutout failed for {s['name']} ({e}), using thumbnail instead.")
-        if cutout is None and s["thumb"]:
-            try:
-                data = fetch_image_bytes(s["thumb"])
-                photo = Image.open(BytesIO(data)).convert("RGB")
+                photo = Image.open(BytesIO(thumb_bytes[s["name"]])).convert("RGB")
                 cutout = tone_photo_thumbnail(photo, 300)
             except Exception as e:
-                print(f"Couldn't fetch thumbnail for {s['name']}: {e}")
+                print(f"Couldn't process thumbnail for {s['name']}: {e}")
         if cutout is None:
             continue
 
@@ -972,7 +1021,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
         })
 
     if not tiles:
-        canvas.save(output_path, "JPEG", quality=90)
+        _save_wallpaper_atomic(canvas, output_path)
         return output_path
 
     # --- count-weighted sizing, normalized to a viewport area budget ---
@@ -1046,7 +1095,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
             )
             draw.text((tx - bbox[0], ty - bbox[1]), name, font=name_font, fill=INK)
 
-    canvas.save(output_path, "JPEG", quality=90)
+    _save_wallpaper_atomic(canvas, output_path)
     return output_path
 
 
@@ -1150,6 +1199,7 @@ if __name__ == "__main__":
         print(f"\n--- Run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
 
     try:
+        load_runtime_config()
         if FROZEN:
             first_run = not os.path.exists(CONFIG_PATH)
             bootstrap_illustrations()
