@@ -47,15 +47,19 @@ double-click (or scheduled run) just refreshes the wallpaper silently — no
 window, no prompts.
 
 Settings after first-run live in `config.ini` next to the exe — edit it
-directly with any text editor to change your postcode, search radius, or the
-title/label toggles later (keys: `postcode`, `radius_km`, `days`,
-`show_title`, `show_labels` — the last two take `true`/`false`); delete the
-whole file to rerun the setup wizard instead.
+directly with any text editor, save, and rerun (delete the whole file
+instead to get the setup wizard back). Available keys:
 
-Want a shorter window than a full day — the last 12, 6, or 1 hour(s) instead?
-Set `hours` in `config.ini` (e.g. `hours = 6`) — it overrides `days`
-whenever it's set to a non-empty value. Leave it blank (the default) to use
-`days` as normal.
+| Key | Default | What it does |
+|---|---|---|
+| `postcode` | your postcode | Set to blank to use the fallback lat/lon below it |
+| `radius_km` | `20` | How far around your postcode to search |
+| `days` | `1` | How many days back to search |
+| `hours` | *(blank)* | Overrides `days` with a sub-day window when set — `6`, `12`, `1`, etc. |
+| `show_title` | `true` | Show a title above the collage |
+| `title_text` | `Garden Visitors` | What that title reads, if shown |
+| `show_labels` | `false` | Show a label under each bird |
+| `label_style` | `common` | What each label shows — `common` (e.g. "Hooded Crow"), `scientific` (e.g. "Corvus cornix"), or `station` (which BirdWeather station detected it) |
 
 New builds are produced automatically by
 [the build workflow](.github/workflows/build-exe.yml) whenever a version tag
@@ -106,9 +110,11 @@ Edit the config block at the top of `birdweather_local.py`:
   including `hours` to override `DAYS`
 - `ILLUSTRATIONS_DIR` — defaults to an `Illustrations/` folder next to the
   script; drop your own bird art in there (see below)
-- `SHOW_TITLE` / `SHOW_LABELS` — toggle the "Garden Visitors" title and
-  each bird's species name; both configurable without editing code in
-  `Birdy.exe` via `config.ini` instead (see above)
+- `SHOW_TITLE` / `TITLE_TEXT` / `SHOW_LABELS` / `LABEL_STYLE` — the title
+  toggle and text, the label toggle, and what each label shows (common
+  name / scientific name / detecting station); all of these are just as
+  easy to set via a `config.ini` next to the script instead of editing
+  code here — same file/keys as the exe uses (see above)
 
 Then run it:
 
