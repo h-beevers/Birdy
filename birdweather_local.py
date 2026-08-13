@@ -102,6 +102,8 @@ _DEFAULTS = {
     "fallback_lon": "-1.45",
     "radius_km": "20",
     "days": "1",
+    "show_title": "true",
+    "show_labels": "false",
 }
 
 
@@ -146,9 +148,11 @@ OUTPUT_IMAGE = os.path.join(SCRIPT_DIR, "birdweather_wallpaper.jpg")
 # Leave as None to auto-detect your screen resolution.
 IMAGE_WIDTH = None
 IMAGE_HEIGHT = None
+# Show the "Garden Visitors" title above the collage?
+SHOW_TITLE = _cfg.getboolean("show_title")
 # Show a small species name under each bird? The reference collage look
 # (unlabelled flock) has this off by default.
-SHOW_LABELS = False
+SHOW_LABELS = _cfg.getboolean("show_labels")
 
 OUTPUT_FILE = os.path.join(SCRIPT_DIR, "birdweather_snapshot.html")
 
@@ -192,9 +196,11 @@ def register_scheduled_task():
 
 def run_first_time_setup():
     """Tkinter wizard shown once, the first time Birdy.exe runs (i.e. no
-    config.ini next to it yet). Asks just the two things a source-run user
-    would otherwise edit at the top of this file — postcode and whether to
-    auto-refresh — then gets out of the way; every later launch is silent."""
+    config.ini next to it yet). Asks just what a source-run user would
+    otherwise edit at the top of this file — postcode, the title/label
+    toggles, and whether to auto-refresh — then gets out of the way; every
+    later launch is silent. Settings can be changed later by editing
+    config.ini directly, no need to rerun this."""
     import tkinter as tk
     from tkinter import messagebox, simpledialog
 
@@ -215,7 +221,19 @@ def run_first_time_setup():
         postcode = ""
     postcode = postcode.strip()
 
-    values = {"postcode": postcode}
+    show_title = messagebox.askyesno(
+        "Birdy setup",
+        "Show a \"Garden Visitors\" title above the collage?")
+
+    show_labels = messagebox.askyesno(
+        "Birdy setup",
+        "Show each bird's species name underneath it?")
+
+    values = {
+        "postcode": postcode,
+        "show_title": "true" if show_title else "false",
+        "show_labels": "true" if show_labels else "false",
+    }
     save_user_config(values)
 
     auto = messagebox.askyesno(
@@ -242,8 +260,10 @@ def run_first_time_setup():
 
     root.destroy()
 
-    global POSTCODE
+    global POSTCODE, SHOW_TITLE, SHOW_LABELS
     POSTCODE = postcode or None
+    SHOW_TITLE = show_title
+    SHOW_LABELS = show_labels
 
 
 def http_post_json(url, payload, headers=None):
@@ -638,11 +658,14 @@ def get_screen_size():
         return 1920, 1080
 
 
-def load_font(name, size):
-    candidates = [
-        rf"C:\Windows\Fonts\{name}.ttf",
-    ]
-    for path in candidates:
+def load_font(names, size):
+    """names is a single font-file stem, or a list tried in order — lets
+    callers fall back to another elegant serif if their first choice isn't
+    installed, rather than landing on Pillow's tiny default bitmap font."""
+    if isinstance(names, str):
+        names = [names]
+    for name in names:
+        path = rf"C:\Windows\Fonts\{name}.ttf"
         if os.path.exists(path):
             try:
                 return ImageFont.truetype(path, size)
@@ -852,12 +875,16 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     canvas = Image.new("RGB", (width, height), CREAM)
     draw = ImageDraw.Draw(canvas)
 
-    title_font = load_font("georgiab", 54)
-    name_font = load_font("georgia", 18)
+    # Georgia first (a warm serif that suits the illustrated look), falling
+    # back to Times New Roman (always present on Windows) before Pillow's
+    # plain bitmap default.
+    title_font = load_font(["georgiab", "timesbd"], 54)
+    name_font = load_font(["georgia", "times"], 18)
 
-    title = "Garden Visitors"
-    tw = draw.textlength(title, font=title_font)
-    draw.text(((width - tw) / 2, 60), title, font=title_font, fill=INK)
+    if SHOW_TITLE:
+        title = "Garden Visitors"
+        tw = draw.textlength(title, font=title_font)
+        draw.text(((width - tw) / 2, 60), title, font=title_font, fill=INK)
 
     birds = species_list[:60]
     n = len(birds)
@@ -925,7 +952,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     # --- pack ---
     center_x = width / 2
     center_y = height * 0.58
-    top_margin = 170  # keep clear of the title
+    top_margin = 170 if SHOW_TITLE else 60  # keep clear of the title, if shown
     placed = pack_flock(tiles, center_x, center_y, width, height, top_margin)
 
     # draw back-to-front: place larger/central tiles last so they sit on top
