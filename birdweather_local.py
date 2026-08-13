@@ -102,6 +102,7 @@ _DEFAULTS = {
     "fallback_lon": "-1.45",
     "radius_km": "20",
     "days": "1",
+    "hours": "",  # set to override `days` with a sub-day window, e.g. "12" or "6"
     "show_title": "true",
     "show_labels": "false",
 }
@@ -130,6 +131,19 @@ FALLBACK_LON = _cfg.getfloat("fallback_lon")  # (Spofforth, North Yorkshire by d
 
 RADIUS_KM = _cfg.getint("radius_km")   # How far around the point to search
 DAYS = _cfg.getint("days")             # How many days of detections to pull
+
+# `hours` in config.ini overrides `days` with a sub-day window (e.g. "12",
+# "6", "1") — BirdWeather's API takes a {count, unit} duration either way,
+# so this just swaps which unit gets sent instead of bolting on a separate
+# code path. Leave `hours` blank (the default) to use DAYS as before.
+_hours_raw = (_cfg.get("hours") or "").strip()
+if _hours_raw:
+    PERIOD_COUNT = int(_hours_raw)
+    PERIOD_UNIT = "hour"
+else:
+    PERIOD_COUNT = DAYS
+    PERIOD_UNIT = "day"
+
 MAX_SPECIES_CARDS = 40    # Cap on how many species cards to render (HTML view)
 
 SCRIPT_DIR = app_dir()
@@ -335,12 +349,16 @@ query recentNearby($ne: InputLocation, $sw: InputLocation, $period: InputDuratio
 """
 
 
-def fetch_nearby(lat, lon, radius_km, days, first=300):
+def format_period(count, unit):
+    return f"{count} {unit}" + ("" if count == 1 else "s")
+
+
+def fetch_nearby(lat, lon, radius_km, period_count, period_unit="day", first=300):
     bbox = bounding_box(lat, lon, radius_km)
     variables = {
         "ne": bbox["ne"],
         "sw": bbox["sw"],
-        "period": {"count": days, "unit": "day"},
+        "period": {"count": period_count, "unit": period_unit},
         "first": first,
     }
     payload = {"query": DETECTIONS_QUERY, "variables": variables}
@@ -586,7 +604,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <body>
 <header>
   <h1>Garden Visitors</h1>
-  <p class="sub">Recent detections within {radius} km of {place}, last {days} days — via BirdWeather</p>
+  <p class="sub">Recent detections within {radius} km of {place}, last {period_label} — via BirdWeather</p>
   <div class="stats">
     <span>{species_count} species</span>
     <span>{station_count} stations nearby</span>
@@ -606,7 +624,7 @@ PAGE_TEMPLATE = """<!doctype html>
 """
 
 
-def render_html(place, lat, lon, days, radius_km, species_list, station_count, detection_count):
+def render_html(place, lat, lon, period_label, radius_km, species_list, station_count, detection_count):
     illustration_index = build_illustration_index(ILLUSTRATIONS_DIR)
     local_matches = 0
     cards = []
@@ -637,7 +655,7 @@ def render_html(place, lat, lon, days, radius_km, species_list, station_count, d
     html = PAGE_TEMPLATE.format(
         radius=radius_km,
         place=place,
-        days=days,
+        period_label=period_label,
         species_count=len(species_list),
         station_count=station_count,
         detection_count=detection_count,
@@ -1019,9 +1037,11 @@ def main():
         except Exception as e:
             print(f"Postcode lookup failed ({e}), falling back to configured lat/lon.")
 
-    print(f"Querying BirdWeather within {RADIUS_KM} km of ({lat:.4f}, {lon:.4f})...")
+    period_label = format_period(PERIOD_COUNT, PERIOD_UNIT)
+    print(f"Querying BirdWeather within {RADIUS_KM} km of ({lat:.4f}, {lon:.4f}), "
+          f"last {period_label}...")
     try:
-        data = fetch_nearby(lat, lon, RADIUS_KM, DAYS)
+        data = fetch_nearby(lat, lon, RADIUS_KM, PERIOD_COUNT, PERIOD_UNIT)
     except urllib.error.URLError as e:
         print(f"Network error reaching BirdWeather: {e}")
         print("Check your internet connection / firewall and try again.")
@@ -1042,7 +1062,7 @@ def main():
         place=place,
         lat=lat,
         lon=lon,
-        days=DAYS,
+        period_label=period_label,
         radius_km=RADIUS_KM,
         species_list=species_list,
         station_count=stations["totalCount"],
