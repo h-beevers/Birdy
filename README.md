@@ -237,7 +237,15 @@ and "here's a bird it misidentified/uglified" screenshots are all welcome.
 
 ## License
 
-Choose one for your own code — this README doesn't assume anything. If you
-keep BirdWeather-sourced thumbnails or any BirdNET-Pi/AvianVisitors-derived
-material in the repo, check their respective licenses/attribution
-requirements separately.
+[GNU GPLv3](LICENSE) — code and bundled illustrations alike. In short:
+anyone can use, modify, and redistribute Birdy (commercial use included),
+but any distributed modified version must also be released under GPL-3.0
+with source available. This is a deliberate choice, not a default — it
+keeps Birdy itself, and anything forked from it, from ending up closed off
+or resold as a closed product downstream.
+
+This only covers code and illustrations original to this repo. BirdWeather
+thumbnail fallback photos are separately credited/licensed per-image by
+BirdWeather itself (not covered by Birdy's GPL license), and this repo
+doesn't reuse code or assets from BirdNET-Pi/AvianVisitors at all — see
+Credits above.
