@@ -1002,12 +1002,29 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     # doing it inline in the loop above let a later, larger neighbour paint
     # right over an earlier bird's label, since tiles sit only a sliver
     # apart. This guarantees every label ends up on top, unobscured.
+    #
+    # A background chip goes behind each one too: the collage nests birds
+    # into each other's negative space via real per-pixel silhouette
+    # collision, not bounding boxes, so a label anchored just below a
+    # tile's bbox routinely lands over a neighbour's illustration instead
+    # of clear background — legible (it's on top), but cluttered against
+    # busy artwork. A solid cream chip behind the text fixes that without
+    # loosening the packing itself: invisible against the plain
+    # background, opaque against whatever bird happens to be underneath.
     if SHOW_LABELS:
+        chip_pad_x, chip_pad_y = 6, 3
         for t in placed_by_area:
             name = t["species"]["name"]
-            lw = draw.textlength(name, font=name_font)
-            draw.text((t["draw_x"] + t["w"] / 2 - lw / 2, t["draw_y"] + t["h"] + 4),
-                       name, font=name_font, fill=INK)
+            bbox = draw.textbbox((0, 0), name, font=name_font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            tx = t["draw_x"] + t["w"] / 2 - tw / 2
+            ty = t["draw_y"] + t["h"] + 4
+            draw.rounded_rectangle(
+                (tx - chip_pad_x, ty - chip_pad_y,
+                 tx + tw + chip_pad_x, ty + th + chip_pad_y),
+                radius=5, fill=CREAM,
+            )
+            draw.text((tx - bbox[0], ty - bbox[1]), name, font=name_font, fill=INK)
 
     canvas.save(output_path, "JPEG", quality=90)
     return output_path
