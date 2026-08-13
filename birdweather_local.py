@@ -104,8 +104,12 @@ _DEFAULTS = {
     "days": "1",
     "hours": "",  # set to override `days` with a sub-day window, e.g. "12" or "6"
     "show_title": "true",
+    "title_text": "Garden Visitors",
     "show_labels": "false",
+    "label_style": "common",  # "common" / "scientific" / "station"
 }
+
+LABEL_STYLES = ("common", "scientific", "station")
 
 
 def load_user_config():
@@ -162,11 +166,17 @@ OUTPUT_IMAGE = os.path.join(SCRIPT_DIR, "birdweather_wallpaper.jpg")
 # Leave as None to auto-detect your screen resolution.
 IMAGE_WIDTH = None
 IMAGE_HEIGHT = None
-# Show the "Garden Visitors" title above the collage?
+# Show a title above the collage, and what it reads.
 SHOW_TITLE = _cfg.getboolean("show_title")
-# Show a small species name under each bird? The reference collage look
-# (unlabelled flock) has this off by default.
+TITLE_TEXT = _cfg.get("title_text") or _DEFAULTS["title_text"]
+# Show a small label under each bird? The reference collage look
+# (unlabelled flock) has this off by default. label_style picks what the
+# label shows: "common" (e.g. "Hooded Crow"), "scientific" (e.g. "Corvus
+# cornix"), or "station" (which BirdWeather station detected it).
 SHOW_LABELS = _cfg.getboolean("show_labels")
+LABEL_STYLE = (_cfg.get("label_style") or "common").strip().lower()
+if LABEL_STYLE not in LABEL_STYLES:
+    LABEL_STYLE = "common"
 
 OUTPUT_FILE = os.path.join(SCRIPT_DIR, "birdweather_snapshot.html")
 
@@ -351,6 +361,17 @@ query recentNearby($ne: InputLocation, $sw: InputLocation, $period: InputDuratio
 
 def format_period(count, unit):
     return f"{count} {unit}" + ("" if count == 1 else "s")
+
+
+def label_text_for(species):
+    """Per-bird label text, per LABEL_STYLE. Falls back to the common name
+    if the preferred field is missing (e.g. no scientific name returned for
+    a given species, or no station recorded on that detection)."""
+    if LABEL_STYLE == "scientific":
+        return species["scientific"] or species["name"]
+    if LABEL_STYLE == "station":
+        return species["station"] or species["name"]
+    return species["name"]
 
 
 def fetch_nearby(lat, lon, radius_km, period_count, period_unit="day", first=300):
@@ -910,9 +931,8 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     name_font = load_font(["georgia", "times"], 18)
 
     if SHOW_TITLE:
-        title = "Garden Visitors"
-        tw = draw.textlength(title, font=title_font)
-        draw.text(((width - tw) / 2, 60), title, font=title_font, fill=INK)
+        tw = draw.textlength(TITLE_TEXT, font=title_font)
+        draw.text(((width - tw) / 2, 60), TITLE_TEXT, font=title_font, fill=INK)
 
     birds = species_list[:60]
     n = len(birds)
@@ -1014,7 +1034,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     if SHOW_LABELS:
         chip_pad_x, chip_pad_y = 6, 3
         for t in placed_by_area:
-            name = t["species"]["name"]
+            name = label_text_for(t["species"])
             bbox = draw.textbbox((0, 0), name, font=name_font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
             tx = t["draw_x"] + t["w"] / 2 - tw / 2
