@@ -36,8 +36,10 @@ No Python install, no editing config files by hand. Grab the latest
 `Birdy.exe` from the [Releases page](../../releases), put it in a permanent
 folder (e.g. `Documents\Birdy`), and double-click it.
 
-The first launch runs a short one-time setup: it asks for your postcode and
-offers to register the 15-minute auto-refresh for you (see
+The first launch runs a short one-time setup: it asks for your postcode,
+whether to show the "Garden Visitors" title above the collage, whether to
+show each bird's species name underneath it, and offers to register the
+15-minute auto-refresh for you (see
 [Running it automatically](#running-it-automatically) — this does that step
 for you via `schtasks`, no manual Task Scheduler work needed). It also seeds
 an `Illustrations/` folder next to the exe with this repo's bundled bird art,
@@ -45,9 +47,11 @@ which you can add your own images to at any time (see below). Every later
 double-click (or scheduled run) just refreshes the wallpaper silently — no
 window, no prompts.
 
-Settings after first-run live in `config.ini` next to the exe if you want to
-change your postcode or search radius later; delete it to rerun the setup
-wizard.
+Settings after first-run live in `config.ini` next to the exe — edit it
+directly with any text editor to change your postcode, search radius, or the
+title/label toggles later (keys: `postcode`, `radius_km`, `days`,
+`show_title`, `show_labels` — the last two take `true`/`false`); delete the
+whole file to rerun the setup wizard instead.
 
 New builds are produced automatically by
 [the build workflow](.github/workflows/build-exe.yml) whenever a version tag
@@ -60,7 +64,7 @@ it into the **same folder**, overwriting the old one — that's it, no
 uninstall step. This is safe because everything Birdy remembers about your
 setup lives in separate files next to the exe, not inside it:
 
-- `config.ini` (your postcode/radius/days) is untouched.
+- `config.ini` (postcode/radius/days, title/label toggles) is untouched.
 - Your `Illustrations/` folder is untouched — nothing gets overwritten or
   merged into it.
 - The Scheduled Task keeps working with zero changes, since it points at
@@ -95,6 +99,9 @@ Edit the config block at the top of `birdweather_local.py`:
 - `RADIUS_KM` / `DAYS` — how far and how recent a window to search
 - `ILLUSTRATIONS_DIR` — defaults to an `Illustrations/` folder next to the
   script; drop your own bird art in there (see below)
+- `SHOW_TITLE` / `SHOW_LABELS` — toggle the "Garden Visitors" title and
+  each bird's species name; both configurable without editing code in
+  `Birdy.exe` via `config.ini` instead (see above)
 
 Then run it:
 
