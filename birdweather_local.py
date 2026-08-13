@@ -731,11 +731,21 @@ def add_drop_shadow(canvas, cutout, x, y, opacity=32):
     the bare silhouette, not the shadow-extended one), so a strong shadow
     routinely bleeds onto whichever neighbour got placed next door,
     muddying the seam between them. A lighter, tighter shadow keeps the
-    grounding effect without visibly darkening the bird beside it."""
+    grounding effect without visibly darkening the bird beside it.
+
+    Thin protrusions — tail feathers, wingtips, a leg — get eroded out of
+    the mask before blurring, rather than blurred directly: blurring a
+    single-pixel-wide sliver just blooms it into a soft blob that reads as
+    a stray dark smudge floating near the bird's edge, disconnected from
+    the shape that's supposedly casting it. Eroding first drops those
+    slivers from the shadow entirely, leaving only the main body mass —
+    which is what actually needs to look grounded — to cast a shadow."""
     size = min(cutout.size)
-    blur = max(5, size * 0.035)
-    offset = (max(2, round(size * 0.012)), max(3, round(size * 0.022)))
-    shadow_alpha = cutout.split()[-1].point(lambda p: opacity if p > 0 else 0)
+    blur = max(5, size * 0.03)
+    offset = (max(2, round(size * 0.01)), max(3, round(size * 0.018)))
+    erode = max(3, round(size * 0.012)) | 1  # odd kernel size, MinFilter requires it
+    alpha = cutout.split()[-1].filter(ImageFilter.MinFilter(erode))
+    shadow_alpha = alpha.point(lambda p: opacity if p > 0 else 0)
     shadow = Image.new("RGBA", cutout.size, (20, 15, 10, 0))
     shadow.putalpha(shadow_alpha)
     shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
@@ -951,8 +961,11 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
 
     # --- pack ---
     center_x = width / 2
-    center_y = height * 0.58
     top_margin = 170 if SHOW_TITLE else 60  # keep clear of the title, if shown
+    # Vertical center of the flock is derived from top_margin (rather than a
+    # flat fraction of height) so hiding the title reclaims that space
+    # instead of leaving it as a dead gap above a collage that stayed put.
+    center_y = top_margin + (height - top_margin) * 0.50
     placed = pack_flock(tiles, center_x, center_y, width, height, top_margin)
 
     # draw back-to-front: place larger/central tiles last so they sit on top
@@ -965,12 +978,18 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
         x, y = round(t["x"]), round(t["y"])
         add_drop_shadow(canvas, cutout, x, y)
         canvas.paste(cutout, (x, y), mask=cutout)
+        t["draw_x"], t["draw_y"] = x, y
 
-        if SHOW_LABELS:
+    # Labels are drawn in their own pass, after every bird is on the canvas —
+    # doing it inline in the loop above let a later, larger neighbour paint
+    # right over an earlier bird's label, since tiles sit only a sliver
+    # apart. This guarantees every label ends up on top, unobscured.
+    if SHOW_LABELS:
+        for t in placed_by_area:
             name = t["species"]["name"]
             lw = draw.textlength(name, font=name_font)
-            draw.text((x + t["w"] / 2 - lw / 2, y + t["h"] + 4), name,
-                       font=name_font, fill=INK)
+            draw.text((t["draw_x"] + t["w"] / 2 - lw / 2, t["draw_y"] + t["h"] + 4),
+                       name, font=name_font, fill=INK)
 
     canvas.save(output_path, "JPEG", quality=90)
     return output_path
