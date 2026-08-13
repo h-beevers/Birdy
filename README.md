@@ -6,11 +6,14 @@ public community station network, rendered as an overlapping flock collage
 in the style of [AvianVisitors](https://github.com/Twarner491/AvianVisitors),
 and set directly as your Windows desktop background.
 
-No microphone, no Raspberry Pi, no hardware required — this queries
-BirdWeather's existing station network for your area. It started as a
-"phase 0" preview while waiting on hardware for a proper
-[BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi) build, and turned
-into its own thing.
+[BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi)/AvianVisitors-style
+setups are genuinely great, but they need a Raspberry Pi and a mic pointed
+out a window. Birdy exists so anyone on a Windows desktop can get the same
+"what's been heard nearby, as art on my screen" result with none of that —
+no hardware, no soldering, no always-on device — by leaning on BirdWeather's
+existing public station network instead of running your own. It started as
+a "phase 0" preview while waiting on hardware for a proper BirdNET-Pi build,
+and turned into its own thing worth sharing on its own.
 
 
 ## What it does
@@ -223,6 +226,12 @@ resolution involved.
   reimplementation of the general layout idea, using your own generated
   artwork or BirdWeather's own thumbnails.
 - Postcode lookup: [postcodes.io](https://postcodes.io)
+
+## Feedback
+
+Early days — if you try it and hit something odd, or want a feature that's
+not here yet, [open an issue](../../issues). Bug reports, feature requests,
+and "here's a bird it misidentified/uglified" screenshots are all welcome.
 
 ## License
 
