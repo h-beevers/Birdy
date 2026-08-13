@@ -52,6 +52,11 @@ title/label toggles later (keys: `postcode`, `radius_km`, `days`,
 `show_title`, `show_labels` — the last two take `true`/`false`); delete the
 whole file to rerun the setup wizard instead.
 
+Want a shorter window than a full day — the last 12, 6, or 1 hour(s) instead?
+Set `hours` in `config.ini` (e.g. `hours = 6`) — it overrides `days`
+whenever it's set to a non-empty value. Leave it blank (the default) to use
+`days` as normal.
+
 New builds are produced automatically by
 [the build workflow](.github/workflows/build-exe.yml) whenever a version tag
 is pushed, and attached to that release — nothing to build yourself.
@@ -95,7 +100,10 @@ pip install -r requirements.txt
 Edit the config block at the top of `birdweather_local.py`:
 
 - `POSTCODE` — your postcode (or `None` to use the fallback lat/lon below it)
-- `RADIUS_KM` / `DAYS` — how far and how recent a window to search
+- `RADIUS_KM` / `DAYS` — how far and how recent a window to search. For a
+  sub-day window (last 12/6/1 hour(s)), it's easier to drop a `config.ini`
+  next to the script instead — same file/keys as the exe uses (see above),
+  including `hours` to override `DAYS`
 - `ILLUSTRATIONS_DIR` — defaults to an `Illustrations/` folder next to the
   script; drop your own bird art in there (see below)
 - `SHOW_TITLE` / `SHOW_LABELS` — toggle the "Garden Visitors" title and
