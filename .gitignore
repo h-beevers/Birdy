@@ -18,3 +18,4 @@ dist/
 # Your generated bird illustrations are tracked by default (Illustrations/).
 # If you'd rather not commit binary image files to the repo, uncomment:
 # Illustrations/
+*.TMP
