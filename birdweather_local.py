@@ -756,7 +756,25 @@ def cutout_illustration(img, tolerance=32, max_dim=420):
     """Removes a roughly-uniform background (sampled from the corners) and
     returns a transparent-background RGBA cutout, cropped to content.
     Works well for the local illustrations (flat cream background by design);
-    not intended for photos with busy backgrounds."""
+    not intended for photos with busy backgrounds.
+
+    If the image already carries real transparency (e.g. illustrations that
+    arrive pre-cut, like AvianVisitors' own bundled art), that alpha is used
+    as-is rather than re-derived: converting straight to RGB would silently
+    drop it, exposing whatever ground color is still sitting under the
+    transparent pixels and producing a stray halo/speckle around the edges."""
+    if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+        rgba = img.convert("RGBA")
+        if rgba.getchannel("A").getextrema()[0] < 255:
+            bbox = rgba.getbbox()
+            if bbox:
+                rgba = rgba.crop(bbox)
+            if max(rgba.size) > max_dim:
+                scale = max_dim / max(rgba.size)
+                rgba = rgba.resize((max(1, int(rgba.width * scale)),
+                                     max(1, int(rgba.height * scale))), Image.LANCZOS)
+            return rgba
+
     img = img.convert("RGB")
     w, h = img.size
     corners = [img.getpixel((0, 0)), img.getpixel((w - 1, 0)),
