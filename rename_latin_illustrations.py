@@ -19,7 +19,7 @@ Usage:
 Example:
     python3 rename_latin_illustrations.py ^
         "E:\\Documents\\Homemade Apps\\AvianVisitors-avian-visitors\\AvianVisitors-avian-visitors\\avian\\assets\\illustrations" ^
-        "E:\\Path\\To\\Birdy\\Illustrations"
+        "E:\\Documents\\Homemade Apps\\Birdy\\Illustrations"
 
 Add --dry-run to preview the renames without copying anything.
 """
