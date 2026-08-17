@@ -19,3 +19,5 @@ dist/
 # If you'd rather not commit binary image files to the repo, uncomment:
 # Illustrations/
 *.TMP
+illustration_generation_log.jsonl
+illustration_review.html

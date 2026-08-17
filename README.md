@@ -209,6 +209,122 @@ If you want the whole set at once rather than picking individual files:
 `Illustrations/` folder out of the extracted ZIP into your own — safe to
 overwrite, since it's the same art you'd get from a fresh install anyway.
 
+## Generating missing illustrations automatically
+
+If you'd rather not hand-make art for every species (`export_species_for_illustrations.py`
+→ Gemini → cutout → rename, over and over), `generate_missing_illustrations.py`
+(top-level, in this repo) tops up your `Illustrations/` folder on its own. It
+queries the *same* BirdWeather data the wallpaper uses, works out which detected
+species have no local art yet, then generates each one via
+[OpenRouter](https://openrouter.ai)'s unified image API and drops the result
+straight into `Illustrations/`.
+
+It makes **no changes** to `birdweather_local.py` — it's a separate tool you run
+standalone to keep the art folder stocked, so the wallpaper never falls back to
+a photo.
+
+**How a generated image stays consistent with your set**
+
+- It reuses Birdy's own `find_local_illustration()` / `_slugify()` matching, so
+  the output is named by the species' *common name* (`Eurasian Jay.png`) — exactly
+  what the wallpaper keys on.
+- It sends up to a few of your **existing** illustrations as style references, so
+  the new art copies your look instead of free-styling.
+- The prompt asks for a **flat cream background (`#F4EDE0`)**, which is what
+  Birdy's `cutout_illustration()` expects (it samples the four corners and strips
+  a uniform background) — so generated art slots into the same cutout pipeline as
+  your hand-made files, no transparency required.
+
+**Accuracy loop** — fully automatic, with a human review net:
+
+1. Generates the image, then runs two checks before it's trusted:
+   - a cheap background-colour sanity check (must be a flat cream, or Birdy's
+     cutout would mangle it), and
+   - a vision pass ("is this a recognisable *{species}* in the right style?").
+2. **PASS** images go straight into `Illustrations/`. **FAIL** images (and their
+   reason) go to `Pending/` — they never touch your live folder.
+3. A single-file review page, `illustration_review.html`, is written so you can
+   eyeball a whole batch in one glance.
+
+### Requirements
+
+- An [OpenRouter](https://openrouter.ai/keys) API key. Any model with
+  `input_references` support works; the default is `google/gemini-3.1-flash-image`
+  (cheap, accurate, accepts up to 14 style references).
+- [Pillow](https://pypi.org/project/Pillow/) (optional — only needed for the
+  background-colour sanity check; without it that gate is skipped and the vision
+  pass decides).
+- Cost is enforced by a hard `--max-cost` budget (OpenRouter returns the exact
+  USD per image). Defaults are tuned to stay well under a 100-image, cents-per-
+  image run — a typical run is pennies.
+
+### Dry run first (no API calls, no key needed)
+
+```powershell
+cd path\to\Birdy
+& "C:\Path\To\Python311\python.exe" generate_missing_illustrations.py --dry-run
+```
+
+This prints the detected species it would generate, the common names it'll
+save under, and the prompts — using live BirdWeather data — without spending
+anything. Useful to sanity-check before a real run.
+
+### Generate
+
+The script reads the key from `$env:OPENROUTER_API_KEY` or `--key`. To keep the
+key out of shell history, prefer a key file:
+
+```powershell
+Set-Content -Path .\birdy_key.txt -Value 'YOUR_KEY' -NoNewline
+& "C:\Path\To\Python311\python.exe" generate_missing_illustrations.py --key-file .\birdy_key.txt
+Remove-Item .\birdy_key.txt
+```
+
+Or inline (key briefly visible in the process list):
+
+```powershell
+$env:OPENROUTER_API_KEY='YOUR_KEY'
+& "C:\Path\To\Python311\python.exe" generate_missing_illustrations.py
+```
+
+Useful flags: `--limit N` (cap birds this run, default 100), `--days N` /
+`--radius-km N` (search window, same as the wallpaper), `--style-refs N` (how
+many existing illustrations to send as style anchors, default 4), `--max-cost
+$USD` (hard stop, default 5.0), `--verify-model` / `--image-model` (override the
+defaults), `--no-verify` (skip the vision pass), `--no-wiki` (skip the Wikipedia
+description lookup).
+
+### Releasing quarantined images
+
+If a `Pending/` image is "wrong" but good enough for you (e.g. plumage slightly
+off but recognisable), release it into `Illustrations/` so Birdy matches it:
+
+```powershell
+# one bird, by name (or path to the .png)
+& "C:\Path\To\Python311\python.exe" generate_missing_illustrations.py --release "Eurasian Moorhen"
+
+# everything in Pending/ at once
+& "C:\Path\To\Python311\python.exe" generate_missing_illustrations.py --release-all
+```
+
+Add `--overwrite` to replace an existing `Illustrations/` file. Either way,
+`illustration_review.html` is rebuilt so you can see what's left. You can also
+regenerate just the review sheet without touching anything:
+
+```powershell
+& "C:\Path\To\Python311\python.exe" generate_missing_illustrations.py --rebuild-sheet
+```
+
+### Notes
+
+- Run it standalone (on demand, or on its own schedule) — **not** on the 15-minute
+  wallpaper refresh, so it never spends while you're away.
+- `illustration_generation_log.jsonl` records every species, cost, and verdict,
+  so you can audit spend.
+- Generation and release are the only things it writes: into `Illustrations/`,
+  `Pending/`, `illustration_review.html`, and the log. `birdweather_local.py` is
+  never modified.
+
 ## Running it automatically
 
 **If you're using Birdy.exe**, the first-run setup wizard offers to do all
