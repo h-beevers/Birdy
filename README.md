@@ -138,42 +138,17 @@ artwork without clashing too badly — but they're a fallback, not the goal.
 Drop your own illustrations into `Illustrations/`, named loosely after the
 species' common name (`Hooded Crow.png`, `hooded_crow.png`, and
 `HoodedCrow.jpg` all match "Hooded Crow" — case, spaces, and punctuation are
-ignored). The script auto-detects and strips a flat/uniform background from
+ignored). Or it's Latin name.The script auto-detects and strips a flat/uniform background from
 these (assuming you generate them that way — see prompt notes below), giving
 a clean cutout for the flock layout. Anything without a local match falls
 back to the BirdWeather photo.
 
-### Got illustrations named by Latin/scientific name?
+Excellent UK illustrations packs are available from these sources, thankyou to those:
+https://github.com/jonnywright/AvianAssets
 
-Birdy only matches files in `Illustrations/` against a species' *common*
-name (see above) — it never looks at the scientific name for matching, only
-for the optional on-image `scientific` label. If your illustrations are
-named like `Corvus_cornix.png` instead of `Hooded Crow.png` (for example,
-files generated via [AvianVisitors](https://github.com/Twarner491/AvianVisitors)'
-own `pregen.py`, which names output by Latin name), Birdy will silently
-treat them as unmatched and fall back to the BirdWeather photo instead.
-
-`rename_latin_illustrations.py` (in this repo) fixes that: point it at a
-folder of Latin-named images and your `Illustrations/` folder, and it looks
-up each species' English common name via the free [GBIF species
-API](https://www.gbif.org/developer/species) and copies the file across
-under that name, leaving your originals untouched.
+https://github.com/jonnywright/AvianAssets
 
 ```
-python rename_latin_illustrations.py "path\to\latin-named-illustrations" "path\to\Birdy\Illustrations"
-```
-
-Add `--dry-run` to preview the matches first, or `--overwrite` to replace
-files already in `Illustrations/`. Anything it can't find a common name for
-is listed at the end so you can rename those few by hand.
-
-**Note on licensing:** if the illustrations you're renaming came from
-AvianVisitors itself (rather than your own Gemini-generated art in its
-style), they're licensed CC-BY-NC-SA-4.0 — non-commercial, share-alike.
-Keeping them in your own local `Illustrations/` folder is personal use and
-fine, but don't commit them into this (or any GPLv3) repo; the licenses
-aren't compatible.
-
 **A prompt approach that worked well** (used with Gemini, reference photo +
 explicit plumage description, rather than relying on the photo alone):
 
