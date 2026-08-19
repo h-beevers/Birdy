@@ -182,10 +182,12 @@ MAX_SPECIES_CARDS = 40    # Cap on how many species cards to render (HTML view)
 SCRIPT_DIR = app_dir()
 
 # Folder of your own locally-generated illustrations (e.g. Gemini/Comfy
-# output). Filenames just need to loosely match the species' common name —
-# spaces, case, and punctuation don't matter (e.g. "Hooded Crow.png" or
-# "hooded_crow.png" both match "Hooded Crow"). Falls back to the BirdWeather
-# thumbnail for any species without a local match. Set to None to disable.
+# output). Filenames match a species' common name OR its scientific/latin name
+# (spaces, case, and punctuation are ignored, e.g. "Hooded Crow.png",
+# "hooded_crow.png" and "Corvus cornix.png" all match a Hooded Crow detection).
+# If both a common-named and a latin-named file exist for a species, the more
+# recently modified one is used. Falls back to the BirdWeather thumbnail for any
+# species without a local match. Set to None to disable.
 ILLUSTRATIONS_DIR = os.path.join(SCRIPT_DIR, "Illustrations")
 
 # Render a JPG and set it as the actual Windows desktop wallpaper directly —
@@ -476,7 +478,13 @@ def _slugify(text):
 
 
 def build_illustration_index(illustrations_dir):
-    """Maps a normalized species-name slug -> absolute file path."""
+    """Maps a normalized species-name slug -> {'path': ..., 'mtime': ...}.
+
+    Each illustration is keyed by its filename's slug (whether that filename is
+    the common name or the scientific/latin name), recording the file's mtime so
+    a later lookup can prefer the most recently updated artwork when both a
+    common-named and a latin-named copy exist for the same species.
+    """
     index = {}
     if not illustrations_dir or not os.path.isdir(illustrations_dir):
         return index
@@ -485,20 +493,49 @@ def build_illustration_index(illustrations_dir):
         if ext.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
             continue
         slug = _slugify(base_name)
-        index[slug] = os.path.join(illustrations_dir, fname)
+        path = os.path.join(illustrations_dir, fname)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0.0
+        if slug not in index or mtime > index[slug]["mtime"]:
+            index[slug] = {"path": path, "mtime": mtime}
     return index
 
 
-def find_local_illustration(common_name, index):
+def _illustration_lookup(slug, index):
+    """Return (path, mtime) for a slug, or None. Falls back to a substring
+    match (existing fuzzy behaviour) when no exact slug is present."""
+    entry = index.get(slug)
+    if entry:
+        return entry["path"], entry["mtime"]
+    for key, entry in index.items():
+        if slug in key or key in slug:
+            return entry["path"], entry["mtime"]
+    return None
+
+
+def find_local_illustration(common_name, index, scientific=None):
+    """Find a local illustration for a species by its common name OR its
+    scientific (latin) name. If both a common-named and a latin-named file match
+    the same species, the more recently modified one wins.
+
+    Returns an absolute file path, or None.
+    """
     if not index:
         return None
-    slug = _slugify(common_name)
-    if slug in index:
-        return index[slug]
-    for key, path in index.items():
-        if slug in key or key in slug:
-            return path
-    return None
+    candidates = []
+    c = _illustration_lookup(_slugify(common_name), index)
+    if c:
+        candidates.append(c)
+    if scientific:
+        s = _illustration_lookup(_slugify(scientific), index)
+        if s:
+            candidates.append(s)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda m: m[1], reverse=True)
+    return candidates[0][0]
 
 
 _MIME_TYPES = {".png": "image/png", ".jpg": "image/jpeg",
@@ -668,7 +705,7 @@ def render_html(place, lat, lon, period_label, radius_km, species_list, station_
     local_matches = 0
     cards = []
     for s in species_list[:MAX_SPECIES_CARDS]:
-        local_path = find_local_illustration(s["name"], illustration_index)
+        local_path = find_local_illustration(s["name"], illustration_index, s.get("scientific"))
         if local_path:
             try:
                 data_uri = embed_image_as_data_uri(local_path)
@@ -993,7 +1030,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     local_cutouts = {}
     needs_thumb = []
     for s in birds:
-        local_path = find_local_illustration(s["name"], illustration_index)
+        local_path = find_local_illustration(s["name"], illustration_index, s.get("scientific"))
         if local_path:
             try:
                 local_cutouts[s["name"]] = cutout_illustration(Image.open(local_path))
