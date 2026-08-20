@@ -40,6 +40,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 """
 
 import configparser
+import html as html_mod
 import json
 import math
 import os
@@ -493,26 +494,86 @@ def build_illustration_index(illustrations_dir):
         if ext.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
             continue
         slug = _slugify(base_name)
+        if not slug:
+            continue
         path = os.path.join(illustrations_dir, fname)
         try:
             mtime = os.path.getmtime(path)
         except OSError:
             mtime = 0.0
         if slug not in index or mtime > index[slug]["mtime"]:
-            index[slug] = {"path": path, "mtime": mtime}
+            # tokens are kept from the original filename because the slug
+            # has already had its separators stripped ("Coal Tit" ->
+            # "coaltit"), and the fuzzy match below needs word boundaries.
+            index[slug] = {"path": path, "mtime": mtime,
+                           "tokens": frozenset(_tokenize(base_name))}
     return index
 
 
-def _illustration_lookup(slug, index):
-    """Return (path, mtime) for a slug, or None. Falls back to a substring
-    match (existing fuzzy behaviour) when no exact slug is present."""
-    entry = index.get(slug)
+def _tokenize(text):
+    """Species name -> list of lowercase word tokens ("Coal Tit" -> ["coal",
+    "tit"]). Used to keep the fuzzy match below on word boundaries."""
+    return [t for t in re.split(r"[^a-z0-9]+", text.lower()) if t]
+
+
+def _fuzzy_score(query_tokens, key_tokens):
+    """Rank a candidate illustration against a wanted species name.
+
+    Returns a comparable score, or None if the candidate isn't an
+    acceptable match. Higher is better.
+
+    The old rule here was a bare `slug in key or key in slug`, which
+    matched on any substring and then returned whichever candidate the dict
+    happened to yield first — i.e. `os.listdir()` order picked the bird. A
+    detection of "Tit" could be drawn as a Coal Tit, Blue Tit, Great Tit or
+    Long-tailed Tit from run to run, and because that path returned early it
+    also skipped the "most recently modified wins" tie-break that the exact
+    path documents and applies.
+
+    So: require the overlap to land on whole words (a "Tit" file may serve a
+    "Coal Tit" detection, but "tit" must not be clipped out of the middle of
+    an unrelated word), and score every candidate rather than taking the
+    first."""
+    if not query_tokens or not key_tokens:
+        return None
+    # One name's words must be wholly contained in the other's — that keeps
+    # "Coal Tit" <-> "Tit" while rejecting coincidental substrings.
+    if query_tokens <= key_tokens:
+        shared, extra = len(query_tokens), len(key_tokens) - len(query_tokens)
+    elif key_tokens <= query_tokens:
+        shared, extra = len(key_tokens), len(query_tokens) - len(key_tokens)
+    else:
+        return None
+    # Prefer the candidate sharing the most words and padding with the
+    # fewest unmatched ones, so "Coal Tit" beats bare "Tit" for a Coal Tit.
+    return (shared, -extra)
+
+
+def _illustration_lookup(name, index):
+    """Return (path, mtime) for a species name, or None.
+
+    An exact slug hit always wins. Otherwise every word-boundary-compatible
+    candidate is scored and the best one taken, with the file's mtime as the
+    tie-break — matching the "most recently updated artwork wins" rule the
+    exact path already used, instead of deferring to directory order."""
+    entry = index.get(_slugify(name))
     if entry:
         return entry["path"], entry["mtime"]
-    for key, entry in index.items():
-        if slug in key or key in slug:
-            return entry["path"], entry["mtime"]
-    return None
+
+    query_tokens = frozenset(_tokenize(name))
+    best = None
+    for entry in index.values():
+        score = _fuzzy_score(query_tokens, entry["tokens"])
+        if score is None:
+            continue
+        # path is in the sort key purely so equal scores + equal mtimes
+        # still resolve to one stable answer rather than directory order.
+        ranked = (score, entry["mtime"], entry["path"])
+        if best is None or ranked > best:
+            best = ranked
+    if best is None:
+        return None
+    return best[2], best[1]
 
 
 def find_local_illustration(common_name, index, scientific=None):
@@ -525,11 +586,11 @@ def find_local_illustration(common_name, index, scientific=None):
     if not index:
         return None
     candidates = []
-    c = _illustration_lookup(_slugify(common_name), index)
+    c = _illustration_lookup(common_name, index)
     if c:
         candidates.append(c)
     if scientific:
-        s = _illustration_lookup(_slugify(scientific), index)
+        s = _illustration_lookup(scientific, index)
         if s:
             candidates.append(s)
     if not candidates:
@@ -700,52 +761,104 @@ PAGE_TEMPLATE = """<!doctype html>
 """
 
 
-def render_html(place, lat, lon, period_label, radius_km, species_list, station_count, detection_count):
-    illustration_index = build_illustration_index(ILLUSTRATIONS_DIR)
+def esc(value):
+    """HTML-escape a value for interpolation into the page, quotes included.
+
+    Everything that reaches the templates below is third-party input:
+    species names, scientific names and thumbnail URLs come from the
+    BirdWeather API, station names are free text set by whoever runs that
+    station, and the place name comes from postcodes.io. Interpolating any
+    of it raw let a name containing a quote break out of the surrounding
+    attribute (and a name containing a tag inject markup outright) into a
+    page that Lively renders as the live desktop. It also mangled the page
+    on entirely innocent names — an "&" or an apostrophe was enough.
+    """
+    return html_mod.escape("" if value is None else str(value), quote=True)
+
+
+_SAFE_URL_SCHEMES = ("http://", "https://", "data:image/")
+
+
+def safe_url(value):
+    """Escape a URL for an attribute, and drop it unless it is a plain
+    http(s) or data:image URL. Escaping alone keeps a hostile thumbnailUrl
+    inside its attribute but would still happily emit a `javascript:` src;
+    an allowlist is the part that actually makes the scheme harmless."""
+    if not value:
+        return ""
+    url = str(value).strip()
+    if not url.lower().startswith(_SAFE_URL_SCHEMES):
+        return ""
+    return html_mod.escape(url, quote=True)
+
+
+def render_html(place, lat, lon, period_label, radius_km, species_list,
+                station_count, detection_count, illustration_index=None):
+    if illustration_index is None:
+        illustration_index = build_illustration_index(ILLUSTRATIONS_DIR)
     local_matches = 0
     cards = []
     for s in species_list[:MAX_SPECIES_CARDS]:
         local_path = find_local_illustration(s["name"], illustration_index, s.get("scientific"))
+        alt = esc(s["name"])
+        thumb = safe_url(s["thumb"])
         if local_path:
             try:
                 data_uri = embed_image_as_data_uri(local_path)
                 local_matches += 1
-                img_html = f'<img src="{data_uri}" alt="{s["name"]}">'
+                img_html = f'<img src="{data_uri}" alt="{alt}">'
             except Exception as e:
                 print(f"Couldn't embed {local_path} ({e}), falling back to thumbnail.")
-                img_html = (f'<img src="{s["thumb"]}" alt="{s["name"]}" loading="lazy">'
-                             if s["thumb"] else '<span class="placeholder">?</span>')
-        elif s["thumb"]:
-            img_html = f'<img src="{s["thumb"]}" alt="{s["name"]}" loading="lazy">'
+                img_html = (f'<img src="{thumb}" alt="{alt}" loading="lazy">'
+                             if thumb else '<span class="placeholder">?</span>')
+        elif thumb:
+            img_html = f'<img src="{thumb}" alt="{alt}" loading="lazy">'
         else:
             img_html = '<span class="placeholder">?</span>'
         cards.append(CARD_TEMPLATE.format(
-            img_html=img_html,
-            name=s["name"],
-            scientific=s["scientific"],
-            station=s["station"],
-            when=relative_time(s["ts"]),
+            img_html=img_html,   # already-built markup, escaped piecewise above
+            name=alt,
+            scientific=esc(s["scientific"]),
+            station=esc(s["station"]),
+            when=esc(relative_time(s["ts"])),
         ))
     print(f"Using {local_matches} local illustration(s), "
           f"{len(cards) - local_matches} BirdWeather thumbnail(s).")
     html = PAGE_TEMPLATE.format(
-        radius=radius_km,
-        place=place,
-        period_label=period_label,
+        radius=esc(radius_km),
+        place=esc(place),
+        period_label=esc(period_label),
         species_count=len(species_list),
-        station_count=station_count,
-        detection_count=detection_count,
+        station_count=esc(station_count),
+        detection_count=esc(detection_count),
         cards="\n".join(cards) if cards else "<p>No detections found nearby in this window.</p>",
-        generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        generated=esc(datetime.now().strftime("%Y-%m-%d %H:%M")),
     )
     return html
 
 
 def get_screen_size():
+    """Physical desktop resolution in pixels.
+
+    Process DPI awareness is set first: without it Windows reports the
+    DPI-scaled resolution to an unaware process (2560x1440 at 150% scaling
+    comes back as 1707x960), so the wallpaper was rendered short and then
+    upscaled by the compositor — a visibly soft image on any scaled
+    display, which is most laptops. SetProcessDpiAwareness is only
+    available from 8.1 on, so fall back to the older user32 call, and to
+    the unaware measurement if neither is present."""
     if IMAGE_WIDTH and IMAGE_HEIGHT:
         return IMAGE_WIDTH, IMAGE_HEIGHT
     try:
         import ctypes
+        try:
+            # 2 = PROCESS_PER_MONITOR_DPI_AWARE
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
         user32 = ctypes.windll.user32
         return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
     except Exception:
@@ -918,20 +1031,94 @@ def _grid_lookup(tile, canvas_x, canvas_y):
     return False
 
 
-def tiles_collide(a, b, samples=13):
-    ax0, ay0, ax1, ay1 = a["x"], a["y"], a["x"] + a["w"], a["y"] + a["h"]
-    bx0, by0, bx1, by1 = b["x"], b["y"], b["x"] + b["w"], b["y"] + b["h"]
-    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
-    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+def prepare_tile_grid(tile):
+    """Caches a tile's silhouette as a flat tuple plus its dimensions.
+
+    The packer's inner loop used to call _grid_lookup() per sample point,
+    and that re-derived len(grid)/len(grid[0]) every single time. Packing a
+    50-bird flock made 41.8M of those calls and 83.6M len() calls off the
+    back of them, which was the bulk of the whole program's runtime — for
+    dimensions that never change once the grid is built. Resolving them
+    once per tile, and flattening the list-of-lists into one tuple so a
+    lookup is a single index instead of two, is what makes the sampling
+    loop below cheap enough to run inline."""
+    grid = tile["grid"]
+    gh = len(grid)
+    gw = len(grid[0]) if gh else 0
+    tile["_gw"], tile["_gh"] = gw, gh
+    tile["_flat"] = tuple(cell for row in grid for cell in row)
+    return tile
+
+
+def _tile_hits(x, y, w, h, flat, gw, gh, a_sx, a_sy, b, samples=13):
+    """Per-pixel silhouette overlap test between a candidate placement
+    (passed as loose values, so the spiral doesn't have to build a dict for
+    every position it tries) and an already-placed tile.
+
+    Samples exactly the same grid of points as the original pairwise
+    version, including the float expression used to derive them, so the
+    packing it produces is unchanged. The speedup is structural: the column
+    and row indices are constant down a column / across a row, so they're
+    resolved once each instead of once per (i, j) pair, and a column or row
+    that falls outside either silhouette is dropped before it reaches the
+    inner loop at all.
+
+    a_sx/a_sy are the candidate's grid-cells-per-pixel scales. They're
+    passed in rather than derived here because they're fixed for the whole
+    spiral search of a given tile, and this is the hottest function in the
+    program."""
+    bx0, by0 = b["x"], b["y"]
+    bw, bh = b["w"], b["h"]
+    bx1, by1 = bx0 + bw, by0 + bh
+    ix0 = x if x > bx0 else bx0
+    iy0 = y if y > by0 else by0
+    ax1, ay1 = x + w, y + h
+    ix1 = ax1 if ax1 < bx1 else bx1
+    iy1 = ay1 if ay1 < by1 else by1
     if ix1 <= ix0 or iy1 <= iy0:
         return False  # bounding boxes don't even overlap
+
+    b_flat, b_gw, b_gh = b["_flat"], b["_gw"], b["_gh"]
+    b_sx, b_sy = b_gw / bw, b_gh / bh
+    span_x, span_y = ix1 - ix0, iy1 - iy0
+
+    cols = []
     for i in range(samples):
-        for j in range(samples):
-            px = ix0 + (i + 0.5) / samples * (ix1 - ix0)
-            py = iy0 + (j + 0.5) / samples * (iy1 - iy0)
-            if _grid_lookup(a, px, py) and _grid_lookup(b, px, py):
+        px = ix0 + (i + 0.5) / samples * span_x
+        gxa = int((px - x) * a_sx)
+        if gxa < 0 or gxa >= gw:
+            continue
+        gxb = int((px - bx0) * b_sx)
+        if gxb < 0 or gxb >= b_gw:
+            continue
+        cols.append((gxa, gxb))
+    if not cols:
+        return False
+
+    for j in range(samples):
+        py = iy0 + (j + 0.5) / samples * span_y
+        gya = int((py - y) * a_sy)
+        if gya < 0 or gya >= gh:
+            continue
+        gyb = int((py - by0) * b_sy)
+        if gyb < 0 or gyb >= b_gh:
+            continue
+        row_a, row_b = gya * gw, gyb * b_gw
+        for gxa, gxb in cols:
+            if flat[row_a + gxa] and b_flat[row_b + gxb]:
                 return True
     return False
+
+
+def tiles_collide(a, b, samples=13):
+    """Silhouette collision between two placed tiles."""
+    if "_flat" not in a:
+        prepare_tile_grid(a)
+    if "_flat" not in b:
+        prepare_tile_grid(b)
+    return _tile_hits(a["x"], a["y"], a["w"], a["h"],
+                      a["_flat"], a["_gw"], a["_gh"],
+                      a["_gw"] / a["w"], a["_gh"] / a["h"], b, samples)
 
 
 def pack_flock(tiles, center_x, center_y, canvas_w, canvas_h, top_margin,
@@ -940,39 +1127,75 @@ def pack_flock(tiles, center_x, center_y, canvas_w, canvas_h, top_margin,
     bounding boxes), horizontally-biased spiral, and shrink+repack if
     anything ends up off-canvas — mirroring the AvianVisitors approach."""
     ordered = sorted(tiles, key=lambda t: t["w"] * t["h"], reverse=True)
+    for tile in ordered:
+        prepare_tile_grid(tile)
     scale = 1.0
+    max_r = math.hypot(canvas_w, canvas_h) * 0.75
 
     for iteration in range(max_iterations):
         placed = []
+        boxes = []   # (x0, y0, x1, y1) per placed tile, index-aligned
         overflowed = False
         for idx, tile in enumerate(ordered):
             w = tile["w"] * scale
             h = tile["h"] * scale
             if idx == 0:
                 x, y = center_x - w / 2, center_y - h / 2
-                candidate = {**tile, "x": x, "y": y, "w": w, "h": h}
-                placed.append(candidate)
+                placed.append({**tile, "x": x, "y": y, "w": w, "h": h})
+                boxes.append((x, y, x + w, y + h))
                 continue
 
+            flat, gw, gh = tile["_flat"], tile["_gw"], tile["_gh"]
+            a_sx, a_sy = gw / w, gh / h
             theta, r = 0.0, 0.0
-            max_r = math.hypot(canvas_w, canvas_h) * 0.75
             found = None
+            x = y = 0.0
+            # Index of the tile that blocked the previous spiral step.
+            # Successive steps sit a fraction of a tile apart, so whatever
+            # blocked the last position usually blocks this one too;
+            # retesting it first lets the scan below bail on its first
+            # comparison instead of walking the whole placed list again.
+            hint = 0
+            n_placed = len(placed)
             while r < max_r:
                 theta += 0.13
                 r = 2.6 * theta
                 cx = center_x + r * math.cos(theta) * aspect_bias
                 cy = center_y + r * math.sin(theta)
                 x, y = cx - w / 2, cy - h / 2
-                candidate = {**tile, "x": x, "y": y, "w": w, "h": h}
-                if not any(tiles_collide(candidate, p) for p in placed):
-                    found = candidate
+                ax1, ay1 = x + w, y + h
+                # Most placed tiles are nowhere near the candidate, so the
+                # bounding-box reject is done right here rather than behind
+                # a call — at this call volume the function-call overhead
+                # was costing more than the test itself.
+                bx0, by0, bx1, by1 = boxes[hint]
+                if not (bx1 <= x or bx0 >= ax1 or by1 <= y or by0 >= ay1) \
+                        and _tile_hits(x, y, w, h, flat, gw, gh,
+                                       a_sx, a_sy, placed[hint]):
+                    continue
+                blocked = False
+                for pi in range(n_placed):
+                    if pi == hint:
+                        continue
+                    bx0, by0, bx1, by1 = boxes[pi]
+                    if bx1 <= x or bx0 >= ax1 or by1 <= y or by0 >= ay1:
+                        continue
+                    if _tile_hits(x, y, w, h, flat, gw, gh,
+                                  a_sx, a_sy, placed[pi]):
+                        hint = pi
+                        blocked = True
+                        break
+                if not blocked:
+                    found = {**tile, "x": x, "y": y, "w": w, "h": h}
                     break
             if found is None:
                 # give up gracefully at the last tried position; this will
                 # very likely trigger a shrink+repack below anyway
-                found = candidate
+                found = {**tile, "x": x, "y": y, "w": w, "h": h}
                 overflowed = True
             placed.append(found)
+            boxes.append((found["x"], found["y"],
+                          found["x"] + found["w"], found["y"] + found["h"]))
 
             if (found["x"] < 0 or found["y"] < top_margin or
                     found["x"] + found["w"] > canvas_w or
@@ -1033,7 +1256,11 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
         local_path = find_local_illustration(s["name"], illustration_index, s.get("scientific"))
         if local_path:
             try:
-                local_cutouts[s["name"]] = cutout_illustration(Image.open(local_path))
+                # context-managed: Image.open() keeps the file handle open
+                # until the object is collected, and this loop opens one per
+                # species on a job that reruns every 15 minutes.
+                with Image.open(local_path) as im:
+                    local_cutouts[s["name"]] = cutout_illustration(im)
                 continue
             except Exception as e:
                 print(f"Cutout failed for {s['name']} ({e}), using thumbnail instead.")
@@ -1058,7 +1285,8 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
         cutout = local_cutouts.get(s["name"])
         if cutout is None and s["name"] in thumb_bytes:
             try:
-                photo = Image.open(BytesIO(thumb_bytes[s["name"]])).convert("RGB")
+                with Image.open(BytesIO(thumb_bytes[s["name"]])) as raw:
+                    photo = raw.convert("RGB")
                 cutout = tone_photo_thumbnail(photo, 300)
             except Exception as e:
                 print(f"Couldn't process thumbnail for {s['name']}: {e}")
@@ -1199,6 +1427,11 @@ def main():
           f"{detections['speciesCount']} species, "
           f"{stations['totalCount']} stations nearby.")
 
+    # Built once and shared: this stats every file in Illustrations/, and
+    # the HTML pass and the wallpaper pass were each building their own
+    # copy of the identical index on every run.
+    illustration_index = build_illustration_index(ILLUSTRATIONS_DIR)
+
     html = render_html(
         place=place,
         lat=lat,
@@ -1208,6 +1441,7 @@ def main():
         species_list=species_list,
         station_count=stations["totalCount"],
         detection_count=detections["totalCount"],
+        illustration_index=illustration_index,
     )
 
     tmp_file = OUTPUT_FILE + ".tmp"
@@ -1229,7 +1463,6 @@ def main():
             print("Pillow isn't installed — run: pip install Pillow")
         else:
             try:
-                illustration_index = build_illustration_index(ILLUSTRATIONS_DIR)
                 species_counts = count_species(detections["nodes"])
                 render_wallpaper_image(species_list, species_counts,
                                         illustration_index, OUTPUT_IMAGE)
@@ -1239,6 +1472,28 @@ def main():
                 print(f"Couldn't set desktop wallpaper: {e}")
 
 
+LOG_MAX_BYTES = 1_000_000   # roll over at ~1 MB, keeping one old log
+
+
+def open_log_file():
+    """Opens the run log, rotating it first if it has grown large.
+
+    Birdy is normally installed as a scheduled task that reruns every 15
+    minutes for as long as the machine is in use — that's ~35,000 runs a
+    year, all appending to one file that nothing ever truncated. Rolling
+    over at 1 MB keeps enough recent history to debug from without letting
+    the log grow without bound next to the exe."""
+    log_path = os.path.join(app_dir(), "birdweather_local.log")
+    try:
+        if os.path.getsize(log_path) > LOG_MAX_BYTES:
+            os.replace(log_path, log_path + ".1")
+    except OSError:
+        # missing (first run), or locked by something else — either way
+        # appending is still the right move, so just carry on.
+        pass
+    return open(log_path, "a", encoding="utf-8")
+
+
 if __name__ == "__main__":
     import traceback
 
@@ -1246,9 +1501,9 @@ if __name__ == "__main__":
     # console, so sys.stdout/stderr are None rather than writable streams.
     # Redirect to a log file in that case so print() calls don't crash, and
     # so you can still see what happened after the fact.
+    log_file = None
     if sys.stdout is None or not hasattr(sys.stdout, "write"):
-        log_path = os.path.join(app_dir(), "birdweather_local.log")
-        log_file = open(log_path, "a", encoding="utf-8")
+        log_file = open_log_file()
         sys.stdout = log_file
         sys.stderr = log_file
         print(f"\n--- Run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
@@ -1264,6 +1519,14 @@ if __name__ == "__main__":
     except Exception:
         print("\nSomething went wrong — full details below:\n")
         traceback.print_exc()
+    finally:
+        if log_file is not None:
+            # flush and hand the streams back before the process exits, so
+            # the last run's output is on disk even if the interpreter is
+            # torn down abruptly.
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+            log_file.close()
 
     if sys.platform.startswith("win") and sys.stdin is not None and sys.stdin.isatty():
         input("\nPress Enter to close this window...")
