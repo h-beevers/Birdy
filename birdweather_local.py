@@ -1155,6 +1155,75 @@ def _grid_lookup(tile, canvas_x, canvas_y):
     return False
 
 
+def _label_candidates(t, tw, th, gap=8):
+    """Candidate label boxes around a placed tile, nearest/most natural
+    first. Birds are packed edge-to-edge via real silhouette collision, so a
+    label anchored only below-center (the old fixed spot) routinely lands on
+    a neighbour nested right underneath. Offering a ring of alternatives
+    around the tile lets the caller pick whichever one actually lands on
+    clear canvas instead of on someone else's face."""
+    x0, y0, w, h = t["draw_x"], t["draw_y"], t["w"], t["h"]
+    cx = x0 + w / 2
+    below_y = y0 + h + gap
+    above_y = y0 - gap - th
+    mid_y = y0 + h / 2 - th / 2
+    return [
+        (cx - tw / 2, below_y),
+        (x0 + gap, below_y),
+        (x0 + w - gap - tw, below_y),
+        (x0 + w + gap, mid_y),
+        (x0 - gap - tw, mid_y),
+        (cx - tw / 2, above_y),
+        (x0 + gap, above_y),
+        (x0 + w - gap - tw, above_y),
+    ]
+
+
+def _rect_clear(x, y, tw, th, tiles, label_rects, width, height, top_margin,
+                 margin=4, samples=(4, 3)):
+    """True if the label box at (x, y) sits on clear canvas: inside the
+    frame, not over any bird's actual silhouette (sampled from the same
+    per-tile grids the packer uses for collision), and not over a
+    already-placed label."""
+    x1, y1 = x + tw, y + th
+    if x < margin or y < top_margin or x1 > width - margin or y1 > height - margin:
+        return False
+    for lx0, ly0, lx1, ly1 in label_rects:
+        if x < lx1 and x1 > lx0 and y < ly1 and y1 > ly0:
+            return False
+    sx, sy = samples
+    for i in range(sx):
+        px = x + (i + 0.5) / sx * tw
+        for j in range(sy):
+            py = y + (j + 0.5) / sy * th
+            for tile in tiles:
+                if (tile["x"] <= px <= tile["x"] + tile["w"] and
+                        tile["y"] <= py <= tile["y"] + tile["h"] and
+                        _grid_lookup(tile, px, py)):
+                    return False
+    return True
+
+
+def draw_label_with_halo(canvas, draw, pen_xy, text, font, ink_color, halo_color,
+                          blur=2.2, pad=6):
+    """Renders a label as ink text sitting on a soft, feathered glow instead
+    of a hard-edged background chip. A solid rectangle reads as a sticker
+    dropped on top of the artwork; a blurred halo in the same cream as the
+    page reads as if the name were lettered straight onto the illustration,
+    with just enough separation from busy art underneath to stay legible."""
+    x, y = pen_xy
+    bbox = draw.textbbox((x, y), text, font=font)
+    origin = (round(bbox[0] - pad), round(bbox[1] - pad))
+    size = (round(bbox[2] - bbox[0]) + pad * 2, round(bbox[3] - bbox[1]) + pad * 2)
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).text((x - origin[0], y - origin[1]), text, font=font, fill=halo_color)
+    halo = layer.filter(ImageFilter.GaussianBlur(blur))
+    boosted = halo.split()[-1].point(lambda p: min(255, round(p * 2.4)))
+    halo.putalpha(boosted)
+    canvas.paste(halo, origin, mask=halo)
+    draw.text((x, y), text, font=font, fill=ink_color)
+
+
 def prepare_tile_grid(tile):
     """Caches a tile's silhouette as a flat tuple plus its dimensions.
 
@@ -1353,11 +1422,16 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     canvas = Image.new("RGB", (width, height), CREAM)
     draw = ImageDraw.Draw(canvas)
 
-    # Georgia first (a warm serif that suits the illustrated look), falling
-    # back to Times New Roman (always present on Windows) before Pillow's
-    # plain bitmap default.
+    # Palatino Linotype first — the same elegant serif family the HTML
+    # preview is set in ('Iowan Old Style', 'Palatino Linotype', Georgia) —
+    # falling back to Georgia, then Times New Roman (always present on
+    # Windows), before Pillow's plain bitmap default.
     title_font = load_font(["georgiab", "timesbd"], 54)
-    name_font = load_font(["georgia", "times"], 18)
+    name_font = load_font(["palab", "georgiab", "timesbd"], 19)
+    name_font_italic = load_font(["palai", "georgiai", "timesi"], 19)
+    # Scientific names read as italic (matching the HTML card's .sci style);
+    # common/station labels stay in the semibold weight.
+    label_font = name_font_italic if LABEL_STYLE == "scientific" else name_font
 
     if SHOW_TITLE:
         tw = draw.textlength(TITLE_TEXT, font=title_font)
@@ -1477,28 +1551,37 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     # right over an earlier bird's label, since tiles sit only a sliver
     # apart. This guarantees every label ends up on top, unobscured.
     #
-    # A background chip goes behind each one too: the collage nests birds
-    # into each other's negative space via real per-pixel silhouette
-    # collision, not bounding boxes, so a label anchored just below a
-    # tile's bbox routinely lands over a neighbour's illustration instead
-    # of clear background — legible (it's on top), but cluttered against
-    # busy artwork. A solid cream chip behind the text fixes that without
-    # loosening the packing itself: invisible against the plain
-    # background, opaque against whatever bird happens to be underneath.
+    # The collage nests birds into each other's negative space via real
+    # per-pixel silhouette collision, not bounding boxes, so a label fixed
+    # just below a tile's bbox routinely lands over a neighbour's face
+    # instead of clear background. Each label instead searches a small ring
+    # of candidate spots around its own bird (below, to each side, above)
+    # and picks the first one that's actually clear of every silhouette and
+    # of labels already placed, so it reads as sitting in the gap between
+    # birds rather than pasted over one. A soft halo (not a hard chip) keeps
+    # it legible on the rare crowded flock where nothing is fully clear.
     if SHOW_LABELS:
-        chip_pad_x, chip_pad_y = 6, 3
+        label_rects = []
         for t in placed_by_area:
             name = label_text_for(t["species"])
-            bbox = draw.textbbox((0, 0), name, font=name_font)
+            bbox = draw.textbbox((0, 0), name, font=label_font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            tx = t["draw_x"] + t["w"] / 2 - tw / 2
-            ty = t["draw_y"] + t["h"] + 4
-            draw.rounded_rectangle(
-                (tx - chip_pad_x, ty - chip_pad_y,
-                 tx + tw + chip_pad_x, ty + th + chip_pad_y),
-                radius=5, fill=CREAM,
-            )
-            draw.text((tx - bbox[0], ty - bbox[1]), name, font=name_font, fill=INK)
+
+            spot = None
+            for cx, cy in _label_candidates(t, tw, th):
+                if _rect_clear(cx, cy, tw, th, placed_by_area, label_rects,
+                                width, height, top_margin):
+                    spot = (cx, cy)
+                    break
+            if spot is None:
+                # Nothing fully clear — fall back to the natural spot right
+                # below the bird; the halo keeps it legible either way.
+                spot = (t["draw_x"] + t["w"] / 2 - tw / 2, t["draw_y"] + t["h"] + 8)
+
+            tx, ty = spot
+            draw_label_with_halo(canvas, draw, (tx - bbox[0], ty - bbox[1]),
+                                  name, label_font, INK, CREAM)
+            label_rects.append((tx - 3, ty - 3, tx + tw + 3, ty + th + 3))
 
     _save_wallpaper_atomic(canvas, output_path)
     return output_path
