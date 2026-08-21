@@ -61,6 +61,12 @@ instead to get the setup wizard back). Available keys:
 | `show_labels` | `false` | Show a label under each bird |
 | `label_style` | `common` | What each label shows — `common` (e.g. "Hooded Crow"), `scientific` (e.g. "Corvus cornix"), or `station` (which BirdWeather station detected it) |
 
+The four title/label keys apply to **both** outputs — the desktop wallpaper
+and the `birdweather_snapshot.html` page written beside it. Note that
+`show_labels` defaults to `false` for the unlabelled-collage look, so the
+HTML page shows bare portraits by default too; set it to `true` if you want
+species names, station and time under each bird when you open that page.
+
 New builds are produced automatically by
 [the build workflow](.github/workflows/build-exe.yml) whenever a version tag
 is pushed, and attached to that release — nothing to build yourself.
