@@ -1145,14 +1145,26 @@ def compute_silhouette_grid(cutout, grid_w=32):
 
 
 def _grid_lookup(tile, canvas_x, canvas_y):
-    grid = tile["grid"]
-    gh, gw = len(grid), len(grid[0])
+    # Use the flattened grid + cached dims from prepare_tile_grid (same
+    # cache tiles_collide relies on) rather than re-deriving len()/indexing
+    # a list-of-lists on every call — this is hot-path now via label search.
+    if "_flat" not in tile:
+        prepare_tile_grid(tile)
+    flat, gw, gh = tile["_flat"], tile["_gw"], tile["_gh"]
     fx = (canvas_x - tile["x"]) / tile["w"]
     fy = (canvas_y - tile["y"]) / tile["h"]
     gx, gy = int(fx * gw), int(fy * gh)
     if 0 <= gx < gw and 0 <= gy < gh:
-        return grid[gy][gx]
+        return flat[gy * gw + gx]
     return False
+
+
+LABEL_HALO_PAD = 6
+LABEL_HALO_BLUR = 2.2
+# Reach of the rendered halo beyond the raw text box: the pre-blur pad plus
+# ~3 sigma of Gaussian feather. Clearance checks reserve this much space,
+# not just the glyph box, so adjacent halos don't visibly bleed together.
+LABEL_HALO_MARGIN = LABEL_HALO_PAD + round(LABEL_HALO_BLUR * 3)
 
 
 def _label_candidates(t, tw, th, gap=8):
@@ -1180,11 +1192,20 @@ def _label_candidates(t, tw, th, gap=8):
 
 
 def _rect_clear(x, y, tw, th, tiles, label_rects, width, height, top_margin,
-                 margin=4, samples=(4, 3)):
+                 margin=4, samples=(4, 3), halo_margin=0):
     """True if the label box at (x, y) sits on clear canvas: inside the
     frame, not over any bird's actual silhouette (sampled from the same
     per-tile grids the packer uses for collision), and not over a
-    already-placed label."""
+    already-placed label.
+
+    halo_margin inflates the tested box on every side before any of that:
+    the caller checks clearance for a plain text rect, but what actually
+    gets painted is that rect plus a soft halo extending halo_margin
+    further out, so the space reserved here needs to match the space the
+    halo will actually occupy."""
+    if halo_margin:
+        x, y = x - halo_margin, y - halo_margin
+        tw, th = tw + 2 * halo_margin, th + 2 * halo_margin
     x1, y1 = x + tw, y + th
     if x < margin or y < top_margin or x1 > width - margin or y1 > height - margin:
         return False
@@ -1205,7 +1226,7 @@ def _rect_clear(x, y, tw, th, tiles, label_rects, width, height, top_margin,
 
 
 def draw_label_with_halo(canvas, draw, pen_xy, text, font, ink_color, halo_color,
-                          blur=2.2, pad=6):
+                          blur=LABEL_HALO_BLUR, pad=LABEL_HALO_PAD):
     """Renders a label as ink text sitting on a soft, feathered glow instead
     of a hard-edged background chip. A solid rectangle reads as a sticker
     dropped on top of the artwork; a blurred halo in the same cream as the
@@ -1570,7 +1591,8 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
             spot = None
             for cx, cy in _label_candidates(t, tw, th):
                 if _rect_clear(cx, cy, tw, th, placed_by_area, label_rects,
-                                width, height, top_margin):
+                                width, height, top_margin,
+                                halo_margin=LABEL_HALO_MARGIN):
                     spot = (cx, cy)
                     break
             if spot is None:
@@ -1581,7 +1603,8 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
             tx, ty = spot
             draw_label_with_halo(canvas, draw, (tx - bbox[0], ty - bbox[1]),
                                   name, label_font, INK, CREAM)
-            label_rects.append((tx - 3, ty - 3, tx + tw + 3, ty + th + 3))
+            label_rects.append((tx - LABEL_HALO_MARGIN, ty - LABEL_HALO_MARGIN,
+                                 tx + tw + LABEL_HALO_MARGIN, ty + th + LABEL_HALO_MARGIN))
 
     _save_wallpaper_atomic(canvas, output_path)
     return output_path
