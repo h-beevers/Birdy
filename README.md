@@ -144,17 +144,18 @@ artwork without clashing too badly — but they're a fallback, not the goal.
 Drop your own illustrations into `Illustrations/`, named loosely after the
 species' common name (`Hooded Crow.png`, `hooded_crow.png`, and
 `HoodedCrow.jpg` all match "Hooded Crow" — case, spaces, and punctuation are
-ignored). Or it's Latin name.The script auto-detects and strips a flat/uniform background from
+ignored). Or its Latin name. The script auto-detects and strips a flat/uniform background from
 these (assuming you generate them that way — see prompt notes below), giving
 a clean cutout for the flock layout. Anything without a local match falls
 back to the BirdWeather photo.
 
-Excellent UK illustrations packs are available from these sources, thankyou to those:
-https://github.com/jonnywright/AvianAssets
+Excellent UK illustrations packs are available from these sources, thank you
+to those:
+- [jonnywright/AvianAssets](https://github.com/jonnywright/AvianAssets) —
+  ~300 UK species, pre-cutout with transparent backgrounds. See
+  [Importing UK illustrations from AvianAssets](#importing-uk-illustrations-from-avianassets)
+  below for a script that pulls these in automatically.
 
-https://github.com/jonnywright/AvianAssets
-
-```
 **A prompt approach that worked well** (used with Gemini, reference photo +
 explicit plumage description, rather than relying on the photo alone):
 
@@ -189,6 +190,38 @@ If you want the whole set at once rather than picking individual files:
 **Code → Download ZIP** from the top of the repo page, then copy the
 `Illustrations/` folder out of the extracted ZIP into your own — safe to
 overwrite, since it's the same art you'd get from a fresh install anyway.
+
+### Importing UK illustrations from AvianAssets
+
+Rather than downloading files from
+[jonnywright/AvianAssets](https://github.com/jonnywright/AvianAssets) by
+hand, `import_avianassets_illustrations.py` (top-level, in this repo) pulls
+them in for you. That pack's ~300 species are already pre-cutout with
+transparent backgrounds and named by scientific name, which is exactly what
+Birdy's own artwork matching already understands — no AI generation, no API
+key, no renaming step, just a download.
+
+```
+python3 import_avianassets_illustrations.py
+```
+
+By default this only pulls art for species actually detected near you
+recently (same BirdWeather query the wallpaper itself uses) that you don't
+already have local art for — a quick "top up what's missing" pass. Add
+`--all` to pull the entire pack instead (still skipping anything you already
+have, unless `--overwrite`), handy for building out a full library before
+you've had many detections yet — this mode is slower since it looks up each
+species' English common name via the free GBIF API first.
+
+Useful flags: `--dry-run` (show what would be imported without downloading
+anything), `--limit N` (cap this run), `--overwrite` (replace an existing
+local illustration), `--list-unmatched` (also list detected species the pack
+has no art for), `--radius-km` / `--days` (search window, same as the
+wallpaper, `--all` mode ignores these).
+
+Downloaded files aren't covered by this repo's own GPL-3.0 license — see the
+AvianAssets repo for its own terms before redistributing anything you pull
+with this script.
 
 ## Generating missing illustrations automatically
 
@@ -375,6 +408,10 @@ resolution involved.
   No code or assets from that repo are reused here — this is an independent
   reimplementation of the general layout idea, using your own generated
   artwork or BirdWeather's own thumbnails.
+- UK illustration pack:
+  [jonnywright/AvianAssets](https://github.com/jonnywright/AvianAssets),
+  importable via `import_avianassets_illustrations.py` — see that repo for
+  its own license/attribution terms, separate from this one.
 - Postcode lookup: [postcodes.io](https://postcodes.io)
 
 ## Feedback
