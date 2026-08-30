@@ -37,8 +37,12 @@ folder (e.g. `Documents\Birdy`), and double-click it.
 
 The first launch runs a short one-time setup: it asks for your postcode,
 whether to show the "Garden Visitors" title above the collage, whether to
-show each bird's species name underneath it, and offers to register the
-15-minute auto-refresh for you (see
+show each bird's species name underneath it, offers to download ready-made
+illustrations for birds already detected near you from the free
+[AvianAssets](https://github.com/jonnywright/AvianAssets) UK pack (see
+[Importing UK illustrations from AvianAssets](#importing-uk-illustrations-from-avianassets)
+— this does that step for you too, no need to run the script by hand), and
+offers to register the 15-minute auto-refresh for you (see
 [Running it automatically](#running-it-automatically) — this does that step
 for you via `schtasks`, no manual Task Scheduler work needed). It also seeds
 an `Illustrations/` folder next to the exe with this repo's bundled bird art,
@@ -192,6 +196,12 @@ If you want the whole set at once rather than picking individual files:
 overwrite, since it's the same art you'd get from a fresh install anyway.
 
 ### Importing UK illustrations from AvianAssets
+
+**If you're using Birdy.exe**, the first-run setup wizard already offers to
+do this for you (the "nearby, top up what's missing" mode below) — you only
+need the steps in this section if you're running from source, want the
+`--all`/`--dry-run`/etc. flags, or want to re-run the top-up later without
+deleting `config.ini`.
 
 Rather than downloading files from
 [jonnywright/AvianAssets](https://github.com/jonnywright/AvianAssets) by
