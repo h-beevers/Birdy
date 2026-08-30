@@ -64,6 +64,13 @@ except ImportError:
 
 import random
 
+# Only used by the first-run setup wizard's optional AvianAssets pack
+# install (see install_avianassets_pack() below) — a standalone,
+# birdweather_local-independent module, so importing it here carries none
+# of the circular-import risk that importing import_avianassets_illustrations
+# (which itself imports this module) would.
+from rename_latin_illustrations import safe_filename
+
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
@@ -238,13 +245,77 @@ def register_scheduled_task():
                     check=True, capture_output=True, text=True)
 
 
+AVIANASSETS_TREE_URL = (
+    "https://api.github.com/repos/jonnywright/AvianAssets/git/trees/main?recursive=1")
+AVIANASSETS_RAW_BASE = "https://raw.githubusercontent.com/jonnywright/AvianAssets/main/"
+
+
+def _fetch_avianassets_index():
+    """Maps a scientific-name slug -> raw download URL, one entry per
+    species in jonnywright/AvianAssets (the pack's alternate "-2" pose for
+    the same species is skipped, same as import_avianassets_illustrations.py's
+    own index builder — deliberately not shared with that script to avoid a
+    circular import with this module when running as the frozen exe; see
+    the import comment above)."""
+    tree = http_get_json(AVIANASSETS_TREE_URL)
+    index = {}
+    for entry in tree.get("tree", []):
+        path = entry.get("path", "")
+        if (entry.get("type") != "blob" or not path.startswith("illustrations/")
+                or not path.lower().endswith(".png")):
+            continue
+        base = os.path.splitext(os.path.basename(path))[0]
+        if base.endswith("-2"):
+            continue
+        index[_slugify(base)] = AVIANASSETS_RAW_BASE + path
+    return index
+
+
+def install_avianassets_pack(lat, lon, radius_km, days, illustrations_dir):
+    """Best-effort top-up of Illustrations/ from the free jonnywright/
+    AvianAssets pack (README > Importing UK illustrations from AvianAssets),
+    for species BirdWeather has detected near this location. Only ever adds
+    files for species with no local art yet — never overwrites, and a
+    per-species download failure just skips that species rather than
+    aborting the batch. Returns (added, already_covered)."""
+    avian_index = _fetch_avianassets_index()
+    data = fetch_nearby(lat, lon, radius_km, days, "day", first=300)
+    species_list = dedupe_species(data["detections"]["nodes"])
+    ill_index = build_illustration_index(illustrations_dir)
+
+    os.makedirs(illustrations_dir, exist_ok=True)
+    added = already_covered = 0
+    for s in species_list:
+        if find_local_illustration(s["name"], ill_index, s.get("scientific")):
+            already_covered += 1
+            continue
+        url = avian_index.get(_slugify(s.get("scientific") or ""))
+        if not url:
+            continue
+        safe_common = os.path.splitext(safe_filename(s["name"], ".png"))[0]
+        dest = os.path.join(illustrations_dir, safe_common + ".png")
+        if os.path.exists(dest):
+            continue
+        try:
+            img_bytes = fetch_image_bytes(url)
+        except Exception:
+            continue
+        with open(dest, "wb") as f:
+            f.write(img_bytes)
+        added += 1
+    return added, already_covered
+
+
 def run_first_time_setup():
     """Tkinter wizard shown once, the first time Birdy.exe runs (i.e. no
     config.ini next to it yet). Asks just what a source-run user would
     otherwise edit at the top of this file — postcode, the title/label
-    toggles, and whether to auto-refresh — then gets out of the way; every
-    later launch is silent. Settings can be changed later by editing
-    config.ini directly, no need to rerun this."""
+    toggles, whether to auto-refresh — plus one extra one-off action a
+    source-run user would otherwise run by hand: pulling ready-made
+    AvianAssets illustrations for species detected nearby (README >
+    Importing UK illustrations from AvianAssets). Then it gets out of the
+    way; every later launch is silent. Settings can be changed later by
+    editing config.ini directly, no need to rerun this."""
     import tkinter as tk
     from tkinter import messagebox, simpledialog
 
@@ -279,6 +350,35 @@ def run_first_time_setup():
         "show_labels": "true" if show_labels else "false",
     }
     save_user_config(values)
+
+    install_pack = messagebox.askyesno(
+        "Birdy setup",
+        "Download ready-made illustrations for birds detected near you?\n\n"
+        "This pulls free artwork from the AvianAssets UK illustration pack "
+        "(github.com/jonnywright/AvianAssets) for any species BirdWeather "
+        "has already detected nearby, so your first wallpaper uses real "
+        "illustrations instead of photos where possible. Anything it "
+        "can't match still falls back to a BirdWeather photo, same as "
+        "always.")
+    if install_pack:
+        lat, lon = FALLBACK_LAT, FALLBACK_LON
+        if postcode:
+            try:
+                lat, lon, _place = lookup_postcode(postcode)
+            except Exception:
+                pass  # fall back to the configured lat/lon silently
+        try:
+            added, already_covered = install_avianassets_pack(
+                lat, lon, RADIUS_KM, 30, ILLUSTRATIONS_DIR)
+            messagebox.showinfo(
+                "Birdy setup",
+                f"Added {added} illustration(s) from AvianAssets "
+                f"({already_covered} already covered).")
+        except Exception as e:
+            messagebox.showwarning(
+                "Birdy setup",
+                f"Couldn't download illustrations right now ({e}).\n"
+                "You can try again later — see the README.")
 
     auto = messagebox.askyesno(
         "Birdy setup",
