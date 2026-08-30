@@ -65,6 +65,8 @@ GBIF_REQUEST_DELAY_SECONDS = 0.2
 
 
 def http_get(url, timeout=20):
+    if not B.is_safe_download_url(url):
+        raise ValueError(f"refusing to fetch non-http(s) URL: {url!r}")
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
@@ -126,7 +128,11 @@ def build_nearby_targets(species, avian_index, ill_index):
         if not info:
             unmatched.append(s)
             continue
-        todo.append((s["name"], info["url"]))
+        # commonName is BirdWeather API data, not something this script
+        # controls — run it through the same filename sanitizer --all mode
+        # already applies to GBIF names before it becomes a path component.
+        safe_common = os.path.splitext(safe_filename(s["name"], ".png"))[0]
+        todo.append((safe_common, info["url"]))
     return todo, unmatched
 
 

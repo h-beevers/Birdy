@@ -54,6 +54,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 import birdweather_local as B  # noqa: E402  (deliberate late import after path fix)
+# Species/common names below come from BirdWeather (or a Pending/ sidecar
+# echoing one back) rather than from this script, so they get the same
+# filename sanitizer import_avianassets_illustrations.py already applies to
+# GBIF names before either reaches disk.
+from rename_latin_illustrations import safe_filename  # noqa: E402
 
 try:
     from PIL import Image
@@ -233,6 +238,8 @@ def generate_image(prompt, ref_paths, model, api_key, aspect_ratio="1:1"):
     if b64:
         img_bytes = base64.b64decode(b64)
     elif url:
+        if not B.is_safe_download_url(url):
+            raise RuntimeError(f"image API returned a non-http(s) URL: {url!r}")
         req = urllib.request.Request(url, headers={"User-Agent": "Birdy-illu-gen/1.0"})
         with urllib.request.urlopen(req, timeout=30) as r:
             img_bytes = r.read()
@@ -387,7 +394,12 @@ def _do_release(base_name, pending_dir, ill_dir, args):
         except Exception:
             pass
     common = meta.get("species") or base_name
-    dest = os.path.join(ill_dir, common + ".png")
+    # meta["species"] is BirdWeather-sourced text echoed back from the
+    # sidecar, not something this script controls — sanitize before it
+    # becomes a path component, same as everywhere else common names reach
+    # disk.
+    safe_common = os.path.splitext(safe_filename(common, ".png"))[0]
+    dest = os.path.join(ill_dir, safe_common + ".png")
     if os.path.exists(dest) and not args.overwrite:
         return False, (f"Refusing: {dest} already exists "
                        f"(use --overwrite to replace).")
@@ -399,7 +411,7 @@ def _do_release(base_name, pending_dir, ill_dir, args):
           "status": "released", "ts": _now(),
           "gen_cost": meta.get("gen_cost", 0.0),
           "verify_cost": meta.get("verify_cost", 0.0)})
-    return True, (f"Released '{common}' -> Illustrations/{common}.png "
+    return True, (f"Released '{common}' -> Illustrations/{safe_common}.png "
                   f"(Birdy will now match it on the next refresh).")
 
 
@@ -552,8 +564,9 @@ def main():
         for s in missing:
             desc = "" if args.no_wiki else fetch_wikipedia_description(s["name"])
             prompt = build_prompt(s, desc)
+            safe_common = os.path.splitext(safe_filename(s["name"], ".png"))[0]
             print(f"\n* {s['name']} ({s.get('scientific','')})  [{s.get('count',1)} detections]")
-            print(f"  file -> {os.path.join(args.illustrations_dir, s['name'] + '.png')}")
+            print(f"  file -> {os.path.join(args.illustrations_dir, safe_common + '.png')}")
             print(f"  prompt: {prompt[:240]}{'...' if len(prompt) > 240 else ''}")
         print(f"\nDry run complete. Re-run without --dry-run (and with --key) to generate.")
         return
@@ -573,6 +586,9 @@ def main():
             break
 
         common = s["name"]
+        # BirdWeather commonName, sanitized before it becomes a path
+        # component — display text keeps using `common` throughout below.
+        safe_common = os.path.splitext(safe_filename(common, ".png"))[0]
         print(f"\n[{generated + 1}/{len(missing)}] {common} "
               f"({s.get('scientific','')}) — {s.get('count',1)} detections")
 
@@ -614,21 +630,21 @@ def main():
         total_spend += gen_cost + verify_cost
 
         if passed:
-            dest = os.path.join(args.illustrations_dir, common + ".png")
+            dest = os.path.join(args.illustrations_dir, safe_common + ".png")
             save_png(img_bytes, dest)
-            print(f"    PASS — saved to Illustrations/{common}.png "
+            print(f"    PASS — saved to Illustrations/{safe_common}.png "
                   f"(${gen_cost:.4f} gen, ${verify_cost:.4f} verify)")
         else:
-            dest = os.path.join(args.pending_dir, common + ".png")
+            dest = os.path.join(args.pending_dir, safe_common + ".png")
             save_png(img_bytes, dest)
             sidecar = {"species": common, "scientific": s.get("scientific", ""),
                        "prompt": prompt, "reason": reason,
                        "gen_cost": gen_cost, "verify_cost": verify_cost,
                        "ts": _now()}
-            with open(os.path.join(args.pending_dir, common + ".json"), "w",
+            with open(os.path.join(args.pending_dir, safe_common + ".json"), "w",
                       encoding="utf-8") as f:
                 json.dump(sidecar, f, indent=2)
-            print(f"    FAIL — quarantined to Pending/{common}.png "
+            print(f"    FAIL — quarantined to Pending/{safe_common}.png "
                   f"(reason: {reason.splitlines()[0] if reason else ''})")
 
         records.append({

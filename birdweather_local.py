@@ -866,6 +866,22 @@ def safe_url(value):
     return html_mod.escape(url, quote=True)
 
 
+_SAFE_DOWNLOAD_SCHEMES = ("http://", "https://")
+
+
+def is_safe_download_url(value):
+    """True if value is a plain http(s) URL, safe to pass to urlopen().
+
+    Separate from safe_url() above: this gates an actual network fetch
+    rather than an HTML attribute, so data: URIs (fine to embed, pointless
+    to "download") aren't included, and there's no escaping to do. Without
+    this, a hostile or MITM'd thumbnailUrl/image URL could carry a file:
+    or other non-http(s) scheme straight into urlopen()."""
+    if not value:
+        return False
+    return str(value).strip().lower().startswith(_SAFE_DOWNLOAD_SCHEMES)
+
+
 def render_html(place, lat, lon, period_label, radius_km, species_list,
                 station_count, detection_count, illustration_index=None):
     if illustration_index is None:
@@ -979,6 +995,8 @@ def load_font(names, size):
 
 
 def fetch_image_bytes(url):
+    if not is_safe_download_url(url):
+        raise ValueError(f"refusing to fetch non-http(s) URL: {url!r}")
     req = urllib.request.Request(url, method="GET")
     req.add_header("User-Agent", "avianvisitors-local-preview/1.0")
     with urllib.request.urlopen(req, timeout=15) as resp:
