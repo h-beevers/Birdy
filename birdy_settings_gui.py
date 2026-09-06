@@ -104,6 +104,75 @@ def open_settings_gui(parent=None):
     )
     style_box.grid(row=8, column=1, sticky="ew", pady=2)
 
+    # Friendly preset names for the combobox (aliases like "blue" still parse).
+    bg_presets = ("cream", "pastel_blue", "pastel_green")
+    ttk.Label(frame, text="Background colour").grid(
+        row=9, column=0, sticky="w", pady=2
+    )
+    bg_var = tk.StringVar(
+        value=(cfg.get("bg_color") or app._DEFAULTS["bg_color"]).strip()
+    )
+    bg_box = ttk.Combobox(
+        frame,
+        textvariable=bg_var,
+        values=list(bg_presets),
+        width=25,
+    )
+    bg_box.grid(row=9, column=1, sticky="ew", pady=2)
+    ttk.Label(
+        frame,
+        text="Preset (cream / pastel_blue / pastel_green) or hex (#rrggbb) / r,g,b.",
+        wraplength=360,
+    ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+    ttk.Label(frame, text="Min confidence (0–1)").grid(
+        row=11, column=0, sticky="w", pady=2
+    )
+    min_conf_var = tk.StringVar(
+        value=(cfg.get("min_confidence") or app._DEFAULTS["min_confidence"]).strip()
+    )
+    ttk.Entry(frame, textvariable=min_conf_var, width=28).grid(
+        row=11, column=1, sticky="ew", pady=2
+    )
+
+    open_html_var = tk.BooleanVar(
+        value=str(cfg.get("open_html", "false")).lower()
+        in ("1", "true", "yes", "on")
+    )
+    ttk.Checkbutton(
+        frame, text="Open HTML after run", variable=open_html_var
+    ).grid(row=12, column=0, columnspan=2, sticky="w", pady=2)
+
+    def _normalize_bg_color(raw: str) -> str:
+        """Store a preset name when possible, else validated #rrggbb."""
+        bg_raw = (raw or "").strip() or app._DEFAULTS["bg_color"]
+        key = bg_raw.lower().replace(" ", "_").replace("-", "_")
+        if key in app._BG_COLOR_PRESETS:
+            return key
+        parsed = app.parse_bg_color(bg_raw, (244, 237, 224))
+        s = bg_raw.strip()
+        valid = False
+        if s.startswith("#"):
+            h = s[1:]
+            valid = len(h) in (3, 6) and all(
+                c in "0123456789abcdefABCDEF" for c in h
+            )
+        elif "," in s:
+            parts = [p.strip() for p in s.split(",")]
+            if len(parts) == 3:
+                try:
+                    for p in parts:
+                        int(float(p))
+                    valid = True
+                except ValueError:
+                    valid = False
+        if not valid:
+            raise ValueError(
+                "Background colour must be a preset "
+                "(cream, pastel_blue, pastel_green), #rrggbb / #rgb, or r,g,b."
+            )
+        return app.rgb_to_hex(parsed)
+
     def collect_values():
         radius = radius_var.get().strip() or "20"
         days = days_var.get().strip() or "1"
@@ -121,6 +190,16 @@ def open_settings_gui(parent=None):
         style = (label_style_var.get() or "common").strip().lower()
         if style not in app.LABEL_STYLES:
             style = "common"
+        bg_color = _normalize_bg_color(bg_var.get())
+        mc_raw = min_conf_var.get().strip() or app._DEFAULTS["min_confidence"]
+        try:
+            mc = float(mc_raw)
+        except ValueError as e:
+            raise ValueError(
+                "min_confidence must be a number between 0 and 1."
+            ) from e
+        if not 0.0 <= mc <= 1.0:
+            raise ValueError("min_confidence must be between 0 and 1.")
         return {
             "postcode": postcode_var.get().strip(),
             "radius_km": radius,
@@ -130,6 +209,9 @@ def open_settings_gui(parent=None):
             "title_text": title_var.get().strip() or app._DEFAULTS["title_text"],
             "show_labels": _bool_str(show_labels_var.get()),
             "label_style": style,
+            "bg_color": bg_color,
+            "min_confidence": "{:g}".format(mc),
+            "open_html": _bool_str(open_html_var.get()),
         }
 
     def on_save(refresh_after=False):
@@ -244,7 +326,7 @@ def open_settings_gui(parent=None):
         messagebox.showinfo("Birdy settings", msg, parent=root)
 
     btns = ttk.Frame(frame)
-    btns.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+    btns.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
     ttk.Button(btns, text="Save", command=lambda: on_save(False)).grid(
         row=0, column=0, padx=2
     )

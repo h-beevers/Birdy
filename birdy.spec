@@ -10,7 +10,7 @@
 #
 # Entry modules pulled in via imports from birdweather_local.py:
 #   birdy_wallpaper.py (cross-platform set-wallpaper)
-#   birdy_settings_gui.py (--settings GUI)
+#   birdy_settings_gui.py (--settings GUI; bg_color / min_confidence / open_html)
 #
 # --windowed / console=False: no console window on normal runs (matches
 # the pythonw.exe behaviour of the source-run path — see the sys.stdout
