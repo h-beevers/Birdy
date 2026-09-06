@@ -207,8 +207,51 @@ the first time for unsigned CI builds.
 `~/Library/LaunchAgents/`, edit `ProgramArguments` / paths, then
 `launchctl load ~/Library/LaunchAgents/com.birdy.wallpaper.plist`.
 
-See `packaging/README.md` for template details. Android: deferred — see
-`docs/android-feasibility.md`.
+See `packaging/README.md` for template details.
+
+## Android (sideload)
+
+Status: **v1 sideload** — see `docs/android-feasibility.md` and
+`docs/android-shared-contract.md`. Package id: `com.henrybeevers.birdy`
+(debug builds use `.debug` suffix).
+
+Native Kotlin + Jetpack Compose under `android/`. Fetches BirdWeather public
+GraphQL near a UK postcode (postcodes.io), builds a flock collage on-device
+(Canvas/Bitmap — no Python), sets **home** and **lock** wallpapers via
+`WallpaperManager`, and refreshes with **WorkManager**.
+
+### Build debug / release APK
+
+Requires JDK 17+ and Android SDK (platform 35).
+
+```bash
+cd android
+echo "sdk.dir=$ANDROID_HOME" > local.properties   # or set ANDROID_HOME
+./gradlew assembleDebug      # app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleRelease    # unsigned unless you add signingConfig
+```
+
+### Install via adb
+
+```bash
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+On first run, enter a UK postcode and tap **Build collage & set wallpaper**.
+Allow **set wallpaper** when Android prompts. Internet is required for
+BirdWeather and postcodes.io.
+
+### OEM lock-screen note
+
+`FLAG_LOCK` (API 24+) is requested for the lock screen. Samsung / Xiaomi /
+some other OEM skins may ignore it; home wallpaper usually still works.
+WorkManager periods are at least 15 minutes and may be delayed by Doze.
+
+### Privacy (Play-ready later)
+
+On-device preferences only; network calls to BirdWeather + postcodes.io
+disclosed; no ads; uninstall deletes local data. Not listed on Play yet.
+
 
 ## Your own illustrations (optional, but the whole point)
 
