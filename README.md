@@ -4,11 +4,11 @@ A local desktop wallpaper that shows what birds have actually been heard
 near you recently — pulled from [BirdWeather](https://app.birdweather.com)'s
 public community station network, rendered as an overlapping flock collage
 in the style of [AvianVisitors](https://github.com/Twarner491/AvianVisitors),
-and set directly as your Windows desktop background.
+and set directly as your desktop background (Windows, and via packaging helpers on Ubuntu/Linux and macOS).
 
 [BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi)/AvianVisitors-style
 setups are genuinely great, but they need a Raspberry Pi and a mic pointed
-out a window. Birdy exists so anyone on a Windows desktop can get the same
+out a window. Birdy exists so anyone on a desktop can get the same
 "what's been heard nearby, as art on my screen" result with none of that —
 no hardware, no soldering, no always-on device — by leaning on BirdWeather's
 existing public station network instead of running your own. It started as
@@ -50,9 +50,11 @@ which you can add your own images to at any time (see below). Every later
 double-click (or scheduled run) just refreshes the wallpaper silently — no
 window, no prompts.
 
-Settings after first-run live in `config.ini` next to the exe — edit it
-directly with any text editor, save, and rerun (delete the whole file
-instead to get the setup wizard back). Available keys:
+Settings after first-run live in `config.ini` next to the exe. Prefer the
+reopenable settings GUI (`Birdy.exe --settings`, or
+`python birdweather_local.py --settings`, or `packaging/open_settings`) —
+or edit `config.ini` with any text editor, save, and rerun (delete the
+whole file instead to get the setup wizard back). Available keys:
 
 | Key | Default | What it does |
 |---|---|---|
@@ -71,9 +73,11 @@ and the `birdweather_snapshot.html` page written beside it. Note that
 HTML page shows bare portraits by default too; set it to `true` if you want
 species names, station and time under each bird when you open that page.
 
-New builds are produced automatically by
+New Windows builds are produced automatically by
 [the build workflow](.github/workflows/build-exe.yml) whenever a version tag
-is pushed, and attached to that release — nothing to build yourself.
+is pushed. A multi-platform (Windows/Linux/macOS) workflow is proposed in
+`packaging/ci/build-packaged.yml` — copy it over `.github/workflows/build-exe.yml`
+to attach `Birdy-windows.exe` / `Birdy-linux` / `Birdy-macos` on the same tags.
 
 ### Updating Birdy.exe
 
@@ -138,6 +142,60 @@ Your config edits at the top of `birdweather_local.py` will get clobbered
 by a `git pull` only if you edited a line that also changed upstream —
 otherwise they're untouched. Your `Illustrations/` folder is never touched
 by an update either way.
+
+### Ubuntu / Linux (pip/venv or one-file binary)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python birdweather_local.py          # refresh wallpaper
+python birdweather_local.py --settings
+```
+
+Wallpaper set tries **gsettings** (GNOME/Cinnamon/MATE), then **feh**, then
+**swaybg**. If none work, Birdy still writes `birdweather_wallpaper.jpg` and
+prints how to set it manually.
+
+**One-file binary:** download `Birdy-linux` from
+[Releases](../../releases), `chmod +x` it, keep it in a permanent folder
+with room for `config.ini` / `Illustrations/`, and run it (first run may
+prompt like the Windows exe when frozen). Or build locally:
+`pip install pyinstaller && pyinstaller birdy.spec` → `dist/Birdy`.
+
+**Auto-refresh:** copy `packaging/birdy-wallpaper.service` and
+`packaging/birdy-wallpaper.timer` to `~/.config/systemd/user/`, edit
+`ExecStart`, then:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now birdy-wallpaper.timer
+```
+
+### macOS (pip/venv or one-file binary)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python birdweather_local.py
+python birdweather_local.py --settings
+```
+
+Wallpaper set uses `osascript` / System Events. Grant Automation permission
+if macOS prompts.
+
+**One-file binary:** download `Birdy-macos` from
+[Releases](../../releases) (or build with `pyinstaller birdy.spec`), place it
+somewhere permanent, and run it. Gatekeeper may require a right-click → Open
+the first time for unsigned CI builds.
+
+**Auto-refresh:** copy `packaging/com.birdy.wallpaper.plist` to
+`~/Library/LaunchAgents/`, edit `ProgramArguments` / paths, then
+`launchctl load ~/Library/LaunchAgents/com.birdy.wallpaper.plist`.
+
+See `packaging/README.md` for template details. Android: deferred — see
+`docs/android-feasibility.md`.
 
 ## Your own illustrations (optional, but the whole point)
 
@@ -354,9 +412,10 @@ regenerate just the review sheet without touching anything:
 **If you're using Birdy.exe**, the first-run setup wizard offers to do all
 of this for you — just say yes when it asks. Nothing below is needed unless
 you said no then and want it later, or want to change/remove it (Task
-Scheduler → look for "Birdy Wallpaper Refresh").
+Scheduler → look for "Birdy Wallpaper Refresh"). You can also use
+**Settings → Schedule refresh** (`--settings`).
 
-**If you're running from source**, set it up as a Windows Scheduled Task by
+**If you're running from source on Windows**, set it up as a Windows Scheduled Task by
 hand so your wallpaper refreshes on its own:
 
 - **Trigger:** Daily, repeat every 15 minutes, indefinitely
@@ -365,6 +424,10 @@ hand so your wallpaper refreshes on its own:
   `birdweather_local.py`, or just point the action at `run_birdweather.bat`
 - **Security options:** "Run only when user is logged on" is simplest and
   sufficient — this only needs to run while you're actually at the desktop
+
+**Linux / macOS:** use the systemd user timer or launchd plist under
+`packaging/` (see Ubuntu / macOS install sections above). The settings GUI’s
+“Schedule refresh…” button points at the same templates.
 
 ## How the collage layout works
 

@@ -1,16 +1,21 @@
-# PyInstaller spec for the packaged Windows build.
+# PyInstaller spec for packaged one-file builds (Windows / Linux / macOS).
 #
-# Build locally (on Windows, with `pip install pyinstaller` done first):
+# Build locally (with `pip install pyinstaller` done first):
 #   pyinstaller birdy.spec
-# Produces dist/Birdy.exe — a single file, no Python install required to run
-# it. The GitHub Actions workflow (.github/workflows/build-exe.yml) runs
-# this same spec on a windows-latest runner and attaches the result to
-# GitHub Releases, which is the path most users should just download from.
+# Produces dist/Birdy.exe on Windows, or dist/Birdy on Linux/macOS — a
+# single file, no Python install required to run it. The GitHub Actions
+# workflow (.github/workflows/build-exe.yml) runs this same spec on
+# windows-latest, ubuntu-latest, and macos-latest and attaches the
+# results to GitHub Releases.
 #
-# --windowed: no console window on normal runs (matches the pythonw.exe
-# behaviour of the source-run path — see the sys.stdout redirect at the
-# bottom of birdweather_local.py). First-run setup uses Tk dialogs instead
-# of console prompts for exactly this reason.
+# Entry modules pulled in via imports from birdweather_local.py:
+#   birdy_wallpaper.py (cross-platform set-wallpaper)
+#   birdy_settings_gui.py (--settings GUI)
+#
+# --windowed / console=False: no console window on normal runs (matches
+# the pythonw.exe behaviour of the source-run path — see the sys.stdout
+# redirect at the bottom of birdweather_local.py). First-run setup and
+# --settings use Tk dialogs instead of console prompts for that reason.
 
 import sys
 
@@ -20,8 +25,11 @@ a = Analysis(
     ["birdweather_local.py"],
     pathex=[],
     binaries=[],
-    datas=[("Illustrations", "Illustrations")],
-    hiddenimports=[],
+    datas=[
+        ("Illustrations", "Illustrations"),
+        ("packaging", "packaging"),
+    ],
+    hiddenimports=["birdy_wallpaper", "birdy_settings_gui"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
