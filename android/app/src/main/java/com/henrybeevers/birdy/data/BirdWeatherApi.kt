@@ -238,6 +238,8 @@ class BirdWeatherApi(
             placeName = loc.place,
             lat = loc.lat,
             lon = loc.lon,
+            source = DetectionSource.BIRDWEATHER,
+            sourceStatus = "Using BirdWeather",
         )
     }
 }

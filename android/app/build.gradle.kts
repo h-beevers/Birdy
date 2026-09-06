@@ -1,7 +1,15 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
 }
 
 android {
@@ -12,9 +20,21 @@ android {
         applicationId = "com.henrybeevers.birdy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-sideload"
+        versionCode = 2
+        versionName = "1.0.1-sideload"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            val storePath = keystoreProperties["storeFile"] as String?
+            if (storePath != null) {
+                storeFile = file(storePath)
+                storePassword = keystoreProperties["storePassword"] as String?
+                keyAlias = keystoreProperties["keyAlias"] as String?
+                keyPassword = keystoreProperties["keyPassword"] as String?
+            }
+        }
     }
 
     buildTypes {
@@ -24,6 +44,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            val hasSigning = keystorePropertiesFile.exists() &&
+                (keystoreProperties["storeFile"] as String?) != null
+            if (hasSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             applicationIdSuffix = ".debug"

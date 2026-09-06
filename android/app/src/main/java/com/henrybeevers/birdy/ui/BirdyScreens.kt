@@ -37,7 +37,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.henrybeevers.birdy.BirdyApp
 import com.henrybeevers.birdy.collage.CollageRenderer
-import com.henrybeevers.birdy.data.BirdWeatherApi
+import com.henrybeevers.birdy.data.DetectionFetcher
 import com.henrybeevers.birdy.data.BirdySettings
 import com.henrybeevers.birdy.data.PreferencesRepository
 import com.henrybeevers.birdy.wallpaper.WallpaperApplier
@@ -235,7 +235,14 @@ fun SettingsScreen(
         OutlinedTextField(
             value = draft.birdnetUrl,
             onValueChange = { draft = draft.copy(birdnetUrl = it) },
-            label = { Text("BirdNET-Pi URL (optional, unused in v1)") },
+            label = { Text("BirdNET-Pi base URL (preferred when set)") },
+            placeholder = { Text("http://192.168.1.159") },
+            supportingText = {
+                Text(
+                    "Hints: http://192.168.1.159 (LAN) or https://birds.henrybeevers.org " +
+                        "(may 403 off-LAN). Leave blank for BirdWeather only.",
+                )
+            },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
@@ -271,8 +278,9 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(24.dp))
         Text(
-            "Privacy: on-device prefs only. Network calls to BirdWeather + postcodes.io. " +
-                "No ads. Uninstall deletes local data. Sideload v1 — not Play-listed yet.",
+            "Privacy: on-device prefs only. Network calls to BirdNET-Pi (if URL set), " +
+                "BirdWeather + postcodes.io. No ads. Uninstall deletes local data. " +
+                "Sideload — not Play-listed yet.",
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -291,14 +299,14 @@ suspend fun runRefresh(
     prefs: PreferencesRepository,
     settings: BirdySettings,
 ): String {
-    val api = BirdWeatherApi()
-    val nearby = api.fetchForSettings(settings)
+    val nearby = DetectionFetcher().fetch(settings)
     val bmp = CollageRenderer(context).render(nearby.species, settings)
     File(context.filesDir, "last_collage.jpg").outputStream().use {
         bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it)
     }
     val wall = WallpaperApplier(context).apply(bmp, settings.setHome, settings.setLock)
-    val msg = "OK ${nearby.species.size} species · ${nearby.placeName} · ${wall.message}"
+    val msg =
+        "${nearby.sourceStatus} · OK ${nearby.species.size} species · ${nearby.placeName} · ${wall.message}"
     prefs.setStatus(msg)
     return msg
 }

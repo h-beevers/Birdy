@@ -211,35 +211,44 @@ See `packaging/README.md` for template details.
 
 ## Android (sideload)
 
-Status: **v1 sideload** — see `docs/android-feasibility.md` and
-`docs/android-shared-contract.md`. Package id: `com.henrybeevers.birdy`
+Status: **sideload** — see `android/README.md`, `docs/android-feasibility.md`,
+and `docs/android-shared-contract.md`. Package id: `com.henrybeevers.birdy`
 (debug builds use `.debug` suffix).
 
-Native Kotlin + Jetpack Compose under `android/`. Fetches BirdWeather public
-GraphQL near a UK postcode (postcodes.io), builds a flock collage on-device
-(Canvas/Bitmap — no Python), sets **home** and **lock** wallpapers via
-`WallpaperManager`, and refreshes with **WorkManager**.
+Native Kotlin + Jetpack Compose under `android/`. Prefers **BirdNET-Pi** when a
+base URL is set (probes `todays_detections.php?ajax_detections=true`, optional
+`/api/v1/detections/recent`); otherwise **BirdWeather** public GraphQL near a
+UK postcode (postcodes.io). Builds a flock collage on-device (Canvas/Bitmap —
+no Python), sets **home** and **lock** wallpapers via `WallpaperManager`, and
+refreshes with **WorkManager**. Status text shows “Using BirdNET-Pi” vs
+“Using BirdWeather (fallback)”.
 
-### Build debug / release APK
+### Build debug / signed release
 
-Requires JDK 17+ and Android SDK (platform 35).
+Requires JDK 17+ and Android SDK (platform 35). Full steps (including signed
+APK/AAB and `adb install`): **`android/README.md`**.
 
 ```bash
 cd android
 echo "sdk.dir=$ANDROID_HOME" > local.properties   # or set ANDROID_HOME
-./gradlew assembleDebug      # app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease    # unsigned unless you add signingConfig
+./gradlew assembleDebug
+# Signed release needs local (gitignored) android/key.properties → existing .jks
+./gradlew assembleRelease bundleRelease
 ```
 
 ### Install via adb
 
 ```bash
+# Debug
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+# Signed release
+adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
 
-On first run, enter a UK postcode and tap **Build collage & set wallpaper**.
-Allow **set wallpaper** when Android prompts. Internet is required for
-BirdWeather and postcodes.io.
+On first run, enter a UK postcode (and optional BirdNET-Pi URL such as
+`http://192.168.1.159` or `https://birds.henrybeevers.org`) and tap
+**Build collage & set wallpaper**. Allow **set wallpaper** when Android
+prompts. Public BirdNET-Pi hosts may 403 off-LAN — BirdWeather is the fallback.
 
 ### OEM lock-screen note
 
@@ -249,8 +258,9 @@ WorkManager periods are at least 15 minutes and may be delayed by Doze.
 
 ### Privacy (Play-ready later)
 
-On-device preferences only; network calls to BirdWeather + postcodes.io
-disclosed; no ads; uninstall deletes local data. Not listed on Play yet.
+On-device preferences only; network calls to BirdNET-Pi (if configured),
+BirdWeather + postcodes.io disclosed; no ads; uninstall deletes local data.
+Not listed on Play yet. Never commit keystores or `key.properties`.
 
 
 ## Your own illustrations (optional, but the whole point)

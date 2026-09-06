@@ -10,7 +10,7 @@ import androidx.work.WorkerParameters
 import androidx.work.Constraints
 import androidx.work.NetworkType
 import com.henrybeevers.birdy.collage.CollageRenderer
-import com.henrybeevers.birdy.data.BirdWeatherApi
+import com.henrybeevers.birdy.data.DetectionFetcher
 import com.henrybeevers.birdy.data.PreferencesRepository
 import com.henrybeevers.birdy.wallpaper.WallpaperApplier
 import java.io.File
@@ -31,8 +31,7 @@ class RefreshWorker(
         val prefs = PreferencesRepository(applicationContext)
         return try {
             val settings = prefs.current()
-            val api = BirdWeatherApi()
-            val nearby = api.fetchForSettings(settings)
+            val nearby = DetectionFetcher().fetch(settings)
             val collage = CollageRenderer(applicationContext)
             val bmp = collage.render(nearby.species, settings)
             // Persist last collage for preview
@@ -40,7 +39,7 @@ class RefreshWorker(
             FileOutputStream(out).use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
             val wall = WallpaperApplier(applicationContext).apply(bmp, settings.setHome, settings.setLock)
             prefs.setStatus(
-                "OK ${nearby.species.size} species near ${nearby.placeName} · ${wall.message}",
+                "${nearby.sourceStatus} · OK ${nearby.species.size} species near ${nearby.placeName} · ${wall.message}",
             )
             Log.i(TAG, wall.message)
             Result.success()

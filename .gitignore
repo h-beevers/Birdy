@@ -323,3 +323,8 @@ android/captures/
 *.apk
 *.aab
 
+android/key.properties
+android/*.jks
+android/*.keystore
+android/dist/
+**/secrets/
