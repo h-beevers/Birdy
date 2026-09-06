@@ -1,5 +1,10 @@
 package com.henrybeevers.birdy.data
 
+enum class DetectionSource {
+    BIRDNET_PI,
+    BIRDWEATHER,
+}
+
 data class SpeciesDetection(
     val name: String,
     val scientific: String = "",
@@ -20,6 +25,8 @@ data class NearbyResult(
     val placeName: String,
     val lat: Double,
     val lon: Double,
+    val source: DetectionSource = DetectionSource.BIRDWEATHER,
+    val sourceStatus: String = "Using BirdWeather (fallback)",
 )
 
 data class BirdySettings(
@@ -36,6 +43,6 @@ data class BirdySettings(
     val setHome: Boolean = true,
     val setLock: Boolean = true,
     val firstRunDone: Boolean = false,
-    // Optional BirdNET-Pi — unused in primary BirdWeather path
+    /** BirdNET-Pi base URL; when non-blank, preferred over BirdWeather. */
     val birdnetUrl: String = "",
 )
