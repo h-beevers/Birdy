@@ -1,0 +1,109 @@
+# PROPOSED replacement for .github/workflows/build-exe.yml
+# Copy to .github/workflows/build-exe.yml (or add as a sibling workflow) once a
+# token with the `workflow` scope is available — the Jill agent OAuth token
+# cannot push changes under .github/workflows/.
+#
+# One-file PyInstaller builds for Windows, Linux, and macOS.
+# - push/PR (path-filtered): smoke-build + upload artifacts
+# - version tag v*: attach all platform binaries to the GitHub Release
+
+name: Build packaged Birdy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "birdweather_local.py"
+      - "birdy_wallpaper.py"
+      - "birdy_settings_gui.py"
+      - "birdy.spec"
+      - "requirements.txt"
+      - "Illustrations/**"
+      - "packaging/**"
+      - ".github/workflows/build-exe.yml"
+  pull_request:
+    paths:
+      - "birdweather_local.py"
+      - "birdy_wallpaper.py"
+      - "birdy_settings_gui.py"
+      - "birdy.spec"
+      - "requirements.txt"
+      - "Illustrations/**"
+      - "packaging/**"
+      - ".github/workflows/build-exe.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: Birdy-windows
+            binary: dist/Birdy.exe
+            release_name: Birdy-windows.exe
+          - os: ubuntu-latest
+            artifact: Birdy-linux
+            binary: dist/Birdy
+            release_name: Birdy-linux
+          - os: macos-latest
+            artifact: Birdy-macos
+            binary: dist/Birdy
+            release_name: Birdy-macos
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Birdy (PyInstaller)
+        run: pyinstaller birdy.spec
+
+      - name: Confirm build output
+        shell: bash
+        run: |
+          test -f "${{ matrix.binary }}"
+          ls -la "${{ matrix.binary }}"
+
+      - name: Stage release-named binary
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp "${{ matrix.binary }}" "release-assets/${{ matrix.release_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release-assets/${{ matrix.release_name }}
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/${{ matrix.release_name }}
+
+  packaging-templates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check packaging templates exist
+        run: |
+          test -f packaging/birdy-wallpaper.service
+          test -f packaging/birdy-wallpaper.timer
+          test -f packaging/com.birdy.wallpaper.plist
+          test -f packaging/open_settings.sh
+          test -f packaging/open_settings.bat
+          test -f docs/android-feasibility.md

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for Birdy wallpaper refresh (macOS).
+
+  1. Copy to ~/Library/LaunchAgents/com.birdy.wallpaper.plist
+  2. Edit ProgramArguments to your Birdy binary OR python + script path
+  3. launchctl load ~/Library/LaunchAgents/com.birdy.wallpaper.plist
+  4. Unload: launchctl unload ~/Library/LaunchAgents/com.birdy.wallpaper.plist
+
+  Runs every 900 seconds while you are logged in.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.birdy.wallpaper</string>
+  <key>ProgramArguments</key>
+  <array>
+    <!-- Example PyInstaller one-file: -->
+    <string>/Users/YOU/Applications/Birdy</string>
+    <!-- Or source run:
+    <string>/Users/YOU/.local/share/birdy/venv/bin/python</string>
+    <string>/Users/YOU/.local/share/birdy/birdweather_local.py</string>
+    -->
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/.local/share/birdy</string>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/.local/share/birdy/birdweather_local.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/.local/share/birdy/birdweather_local.log</string>
+</dict>
+</plist>

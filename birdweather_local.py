@@ -9,8 +9,9 @@ show, using BirdWeather's community station network in the meantime.
 
 Usage:
     python3 birdweather_local.py
+    python3 birdweather_local.py --settings   # reopenable settings GUI
 
-Config is at the top of the file.
+Config is at the top of the file (source) or in config.ini (packaged / GUI).
 
 Requires: pip install Pillow  (used for rendering the desktop wallpaper)
 
@@ -197,8 +198,8 @@ SCRIPT_DIR = app_dir()
 # species without a local match. Set to None to disable.
 ILLUSTRATIONS_DIR = os.path.join(SCRIPT_DIR, "Illustrations")
 
-# Render a JPG and set it as the actual Windows desktop wallpaper directly —
-# no Lively involved. Requires: pip install Pillow
+# Render a JPG and set it as the desktop wallpaper (Windows / Linux / macOS;
+# see birdy_wallpaper.py). Requires: pip install Pillow
 SET_DESKTOP_WALLPAPER = True
 OUTPUT_IMAGE = os.path.join(SCRIPT_DIR, "birdweather_wallpaper.jpg")
 # Leave as None to auto-detect your screen resolution.
@@ -389,8 +390,11 @@ def run_first_time_setup():
     if auto:
         try:
             register_scheduled_task()
-            messagebox.showinfo("Birdy setup", "Auto-refresh is set up. "
-                                 "Setting your first wallpaper now...")
+            messagebox.showinfo(
+                "Birdy setup",
+                "Auto-refresh is set up. Setting your first wallpaper now.\n\n"
+                "Later: run Birdy with --settings (or packaging/open_settings) "
+                "to change options without editing config.ini.")
         except Exception as e:
             messagebox.showwarning(
                 "Birdy setup",
@@ -398,9 +402,12 @@ def run_first_time_setup():
                 "You can still set it up by hand — see the README — or "
                 "just rerun Birdy.exe whenever you want a fresh wallpaper.")
     else:
-        messagebox.showinfo("Birdy setup", "Setting your first wallpaper now. "
-                             "Rerun Birdy.exe any time you want a fresh one — "
-                             "see the README if you'd like it automatic.")
+        messagebox.showinfo(
+            "Birdy setup",
+            "Setting your first wallpaper now. Rerun Birdy any time you want "
+            "a fresh one — see the README if you'd like it automatic.\n\n"
+            "Later: run with --settings (or packaging/open_settings) to change "
+            "options without editing config.ini.")
 
     root.destroy()
 
@@ -1729,16 +1736,15 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
 
 
 def set_windows_wallpaper(image_path):
-    import ctypes
-    SPI_SETDESKWALLPAPER = 20
-    SPIF_UPDATEINIFILE = 0x01
-    SPIF_SENDCHANGE = 0x02
-    abs_path = os.path.abspath(image_path)
-    result = ctypes.windll.user32.SystemParametersInfoW(
-        SPI_SETDESKWALLPAPER, 0, abs_path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
-    )
-    if not result:
-        raise RuntimeError("SystemParametersInfoW reported failure")
+    """Windows-only helper; prefer set_desktop_wallpaper for new call sites."""
+    from birdy_wallpaper import set_windows_wallpaper as _set_win
+    _set_win(image_path)
+
+
+def set_desktop_wallpaper(image_path):
+    """Cross-platform wallpaper set (Windows / Linux / macOS). See birdy_wallpaper.py."""
+    from birdy_wallpaper import set_desktop_wallpaper as _set
+    return _set(image_path)
 
 
 def main():
@@ -1812,8 +1818,8 @@ def main():
                 species_counts = count_species(detections["nodes"])
                 render_wallpaper_image(species_list, species_counts,
                                         illustration_index, OUTPUT_IMAGE)
-                set_windows_wallpaper(OUTPUT_IMAGE)
-                print(f"Desktop wallpaper updated directly ({OUTPUT_IMAGE}).")
+                platform_label = set_desktop_wallpaper(OUTPUT_IMAGE)
+                print(f"Desktop wallpaper updated directly ({platform_label}: {OUTPUT_IMAGE}).")
             except Exception as e:
                 print(f"Couldn't set desktop wallpaper: {e}")
 
@@ -1840,8 +1846,26 @@ def open_log_file():
     return open(log_path, "a", encoding="utf-8")
 
 
+def _wants_settings(argv=None):
+    """True when the user asked for the reopenable settings GUI."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    return "--settings" in args or "-settings" in args
+
+
 if __name__ == "__main__":
     import traceback
+
+    # Settings GUI is a separate Tk window — no wallpaper run, no log redirect
+    # needed beyond what Tk/messagebox already shows.
+    if _wants_settings():
+        try:
+            from birdy_settings_gui import open_settings_gui
+            open_settings_gui()
+        except Exception:
+            traceback.print_exc()
+            if sys.platform.startswith("win") and sys.stdin is not None and sys.stdin.isatty():
+                input("\nPress Enter to close this window...")
+        raise SystemExit(0)
 
     # pythonw.exe (source run) and the packaged --windowed exe both have no
     # console, so sys.stdout/stderr are None rather than writable streams.

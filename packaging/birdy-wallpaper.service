@@ -1,0 +1,26 @@
+# systemd --user service for Birdy wallpaper refresh (Linux).
+#
+# 1. Copy this file and birdy-wallpaper.timer to ~/.config/systemd/user/
+# 2. Edit ExecStart below to your install (venv python + script, or one-file binary)
+# 3. systemctl --user daemon-reload
+# 4. systemctl --user enable --now birdy-wallpaper.timer
+#
+# Logs: journalctl --user -u birdy-wallpaper.service
+
+[Unit]
+Description=Birdy wallpaper refresh
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+# Example — venv + source:
+# ExecStart=%h/.local/share/birdy/venv/bin/python %h/.local/share/birdy/birdweather_local.py
+# Example — PyInstaller one-file:
+# ExecStart=%h/.local/bin/Birdy
+ExecStart=%h/.local/bin/Birdy
+WorkingDirectory=%h/.local/share/birdy
+Nice=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+# systemd --user timer: refresh Birdy wallpaper every 15 minutes while logged in.
+# Pair with birdy-wallpaper.service — see comments in that file.
+
+[Unit]
+Description=Refresh Birdy wallpaper every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=birdy-wallpaper.service
+
+[Install]
+WantedBy=timers.target
