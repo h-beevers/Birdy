@@ -4,6 +4,8 @@ Docs-only extract from desktop `birdweather_local.py` (+ `rename_latin_illustrat
 
 Function pointers are Python names.
 
+BirdNET-Pi preferred local detections source: see [`birdnet-pi-detections-contract.md`](./birdnet-pi-detections-contract.md).
+
 ---
 
 ## 1. BirdWeather GraphQL
