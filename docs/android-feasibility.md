@@ -1,66 +1,62 @@
 # Android feasibility (Birdy)
 
-Status: **consider / defer** — no Android app in this pass.
+Status: **shipped v1 sideload** — Kotlin app under `android/` (package `com.henrybeevers.birdy`).
 
-## What Birdy is today
+Shared contract with desktop GraphQL / dedupe / illustration matching:
+[`docs/android-shared-contract.md`](android-shared-contract.md).
 
-Birdy is a **desktop** tool:
+## What shipped (v1 sideload)
 
-1. Resolve a UK postcode → lat/lon (postcodes.io).
-2. Query BirdWeather’s public GraphQL API for nearby detections.
-3. Render a flock collage locally with **Pillow**.
-4. Set that JPEG as the **OS desktop wallpaper** (Windows WinAPI; Linux gsettings/feh/swaybg; macOS osascript).
-
-Config lives in `config.ini`; optional Tk settings GUI (`--settings`); auto-refresh via schtasks / systemd user timer / launchd.
-
-## What Android would require
-
-| Desktop piece | Android equivalent |
+| Feature | Status |
 |---|---|
-| Set desktop wallpaper | `WallpaperManager` (home and/or lock screen); user must grant permission |
-| Periodic refresh (schtasks / systemd / launchd) | `WorkManager` or a **foreground service** with a persistent notification (background limits since Android 8+/12+) |
-| Pillow collage | Keep Python via Chaquopy / BeeWare / Termux-style, **or** reimplement render in Kotlin/Canvas — large rewrite |
-| Tk settings GUI | Native Compose/XML settings activity |
-| One-file PyInstaller exe | Play-distributed **APK/AAB** with signing, store policy, privacy labels |
+| UK postcode → lat/lon (postcodes.io) | Works |
+| BirdWeather public GraphQL detections | Works (same query as desktop) |
+| `min_confidence` filter → dedupe → cap 60 | Works (per shared contract) |
+| Local flock collage (Kotlin Canvas/Bitmap) | Works (spiral/overlap circles; simpler than desktop Pillow packer) |
+| Bundled `Illustrations/` subset + thumb fallback | Works |
+| Home wallpaper (`WallpaperManager` / `FLAG_SYSTEM`) | Works |
+| Lock wallpaper (`FLAG_LOCK`, API 24+) | Requested; **OEM may ignore** (Samsung/Xiaomi/etc.) |
+| WorkManager periodic refresh | Works (user hours; floor 15 min; Doze may delay) |
+| First-run + settings (postcode, radius, days/hours, refresh, bg_color, min_confidence, title/labels, home/lock toggles) | Works |
+| Optional BirdNET-Pi URL field | Present in settings; **unused in v1** (primary path = BirdWeather) |
+| Play Store listing / signing / privacy form | **Not done** — sideload only |
 
-BirdWeather GraphQL itself is fine on mobile (HTTPS, no key). The hard parts are wallpaper UX, background work, and shipping a native or embedded-Python binary.
+## Build / install
 
-## Size / effort (rough)
+See README **Android (sideload)** section. Short version:
 
-| Approach | APK size (order of magnitude) | Effort | Notes |
-|---|---|---|---|
-| Minimal “save collage to gallery” companion (no live wallpaper) | 5–15 MB if Kotlin + download pre-rendered image from a desktop/server; 30–80 MB if embedding a Python runtime | Small–medium | Does **not** replace desktop Birdy |
-| Full port: local Pillow (Chaquopy) + WallpaperManager + WorkManager | **~40–120 MB** (Python + Pillow + libs) | Large (weeks+) | Fragile Play background policy; OEM wallpaper quirks |
-| Full native reimplement (Kotlin render) | **~5–20 MB** | Large (rewrite collage/a11y/illustration matching) | Best long-term mobile quality; duplicates desktop logic |
+```bash
+cd android
+# SDK via ANDROID_HOME / local.properties sdk.dir=
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
-## Pros / cons vs desktop-only (+ optional gallery export)
+Grant wallpaper permission when prompted. Internet required for BirdWeather + postcodes.io.
 
-**Pros of Android app**
+## OEM lock-screen caveats
 
-- Wallpaper on the device people actually look at all day.
-- Push-ish refresh without a PC left on.
+- API 24+ `WallpaperManager.FLAG_LOCK` is used when “Set lock wallpaper” is on.
+- **Samsung One UI, Xiaomi MIUI, some ColorOS/OxygenOS** builds often ignore or only partially honour `FLAG_LOCK`; home wallpaper is generally reliable.
+- Users on those OEMs may need to set the lock image manually from the saved collage preview (gallery export is a polish gap).
 
-**Cons**
+## WorkManager honesty
 
-- Background execution is hostile; “every 15 minutes forever” is not a reliable product promise without a foreground service.
-- Packaging Python+Pillow into an APK is heavy and awkward to update.
-- Rewriting the collage stack risks diverging from desktop (Jack’s UI/collage/a11y ownership).
-- Store compliance, privacy policy, and UK-postcode-centric UX may not map cleanly to a global Play audience.
+- Periodic work minimum interval is **15 minutes**; shorter settings are floored.
+- Doze, App Standby, and OEM battery savers can delay runs further — not a silent 15-minute daemon promise.
+- Default refresh is measured in **hours** (e.g. 6h).
 
-**Desktop-only + “save collage image”**
+## Remaining Play gaps
 
-- Ship today on Win/Linux/macOS with one codebase.
-- Users who want mobile can sideload the JPEG to the gallery / use an existing wallpaper app.
-- Zero APK maintenance.
+1. Upload key / Play App Signing, AAB build, store listing assets.
+2. Data safety form: disclose BirdWeather + postcodes.io network; on-device prefs; no ads; uninstall deletes data.
+3. Privacy policy URL.
+4. Target API / Play policy review (background work, wallpaper).
+5. Optional: MediaStore export for OEM lock workaround.
+6. Richer collage parity (desktop silhouette packer, drop shadows, label placement search).
+7. Wire optional BirdNET-Pi endpoint if desired.
+8. Automated CI: draft at `packaging/ci/android-apk.yml` — OAuth lacked `workflow` scope, so Henry (or a PAT with workflow scope) should copy it to `.github/workflows/android-apk.yml` and push.
 
-## Verdict
+## Architecture note
 
-**Defer a full Android app.** Birdy’s value is local Pillow rendering + OS wallpaper automation; Android needs a different architecture (permissions, background limits, distribution) that is not a thin wrap of the current script.
-
-**Recommend instead (if mobile demand appears):**
-
-1. Keep investing in desktop packaging (done: Linux/macOS binaries, systemd/launchd templates, settings GUI).
-2. Optional tiny feature later: explicit “Export collage” / share JPEG (gallery-friendly) — still desktop-side, no APK.
-3. Revisit Android only with a **native** prototype and a clear UX that accepts manual or infrequent wallpaper updates — not a silent 15-minute daemon.
-
-No APK is planned in the current packaging work.
+Native Kotlin + Jetpack Compose — **no** Chaquopy / embedded Python / Pillow. Desktop collage/UI/a11y code was not modified for this pass.

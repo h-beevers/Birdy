@@ -314,3 +314,12 @@ Illustrations/Spotted Rufoussided Towhee.png
 Illustrations/Arctic Threetoed Woodpecker.png
 Illustrations/Blackthroated Green Warbler.png
 Illustrations/California Yellowbilled Cuckoo.png
+
+# Android
+android/local.properties
+android/.gradle/
+android/**/build/
+android/captures/
+*.apk
+*.aab
+
