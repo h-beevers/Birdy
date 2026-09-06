@@ -66,9 +66,12 @@ whole file instead to get the setup wizard back). Available keys:
 | `title_text` | `Garden Visitors` | What that title reads, if shown |
 | `show_labels` | `false` | Show a label under each bird |
 | `label_style` | `common` | What each label shows — `common` (e.g. "Hooded Crow"), `scientific` (e.g. "Corvus cornix"), or `station` (which BirdWeather station detected it) |
+| `bg_color` | `#f4ede0` (cream) | Wallpaper + HTML canvas colour. Hex (`#c5d8e8`), `r,g,b`, or a preset: `cream`, `pastel_blue` / `blue`, `pastel_green` / `green`. Gentle pastels look best — bundled art was painted against cream, so a faint cream fringe can show on high-contrast colours (see issue #12) |
+| `min_confidence` | `0` | Drop detections whose BirdWeather confidence `score` is below this (0–1). `0` keeps everything |
+| `open_html` | `false` | Open `birdweather_snapshot.html` in your browser after each run. Leave off for silent scheduled refreshes |
 
-The four title/label keys apply to **both** outputs — the desktop wallpaper
-and the `birdweather_snapshot.html` page written beside it. Note that
+The title/label keys (and `bg_color`) apply to **both** outputs — the desktop
+wallpaper and the `birdweather_snapshot.html` page written beside it. Note that
 `show_labels` defaults to `false` for the unlabelled-collage look, so the
 HTML page shows bare portraits by default too; set it to `true` if you want
 species names, station and time under each bird when you open that page.
@@ -111,30 +114,40 @@ it mid-run; just wait a few seconds and try again.
 
 ### Running from source (for development, or if you'd rather not run a downloaded exe)
 
+Works on Windows, macOS, and Linux. The HTML preview and collage JPG are
+always written; wallpaper is set via `birdy_wallpaper.py` (WinAPI /
+gsettings·feh·swaybg / osascript). See the Ubuntu/Linux and macOS sections
+below for packaging helpers, timers, and `--settings`.
+
 ```
 pip install -r requirements.txt
 ```
 
-Edit the config block at the top of `birdweather_local.py`:
+Prefer a `config.ini` next to the script (same keys as the exe — see the
+table above) over editing constants in the file. Useful keys include
+`postcode`, `radius_km`, `days` / `hours`, title/label toggles, `bg_color`,
+`min_confidence`, and `open_html`.
+
+You can still skim the config comments near the top of
+`birdweather_local.py` for the same defaults:
 
 - `POSTCODE` — your postcode (or `None` to use the fallback lat/lon below it)
 - `RADIUS_KM` / `DAYS` — how far and how recent a window to search. For a
-  sub-day window (last 12/6/1 hour(s)), it's easier to drop a `config.ini`
-  next to the script instead — same file/keys as the exe uses (see above),
-  including `hours` to override `DAYS`
+  sub-day window (last 12/6/1 hour(s)), set `hours` in `config.ini`
 - `ILLUSTRATIONS_DIR` — defaults to an `Illustrations/` folder next to the
   script; drop your own bird art in there (see below)
-- `SHOW_TITLE` / `TITLE_TEXT` / `SHOW_LABELS` / `LABEL_STYLE` — the title
-  toggle and text, the label toggle, and what each label shows (common
-  name / scientific name / detecting station); all of these are just as
-  easy to set via a `config.ini` next to the script instead of editing
-  code here — same file/keys as the exe uses (see above)
+- `SHOW_TITLE` / `TITLE_TEXT` / `SHOW_LABELS` / `LABEL_STYLE` — title and
+  label toggles (also via `config.ini`)
 
 Then run it:
 
 ```
 python birdweather_local.py
 ```
+
+On Windows you can also double-click `run_birdweather.bat` (uses `pythonw`
+so no console window). Reopen settings anytime with
+`python birdweather_local.py --settings` (or `packaging/open_settings`).
 
 **Updating**: `git pull` (or re-download the ZIP and overwrite the files),
 then `pip install -r requirements.txt` again in case dependencies changed.

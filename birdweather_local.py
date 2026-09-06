@@ -116,9 +116,80 @@ _DEFAULTS = {
     "title_text": "Garden Visitors",
     "show_labels": "false",
     "label_style": "common",  # "common" / "scientific" / "station"
+    # Wallpaper + HTML canvas colour. Hex (#rrggbb / #rgb) or "r,g,b".
+    # Named presets: cream (default), pastel_blue / blue.
+    "bg_color": "#f4ede0",
+    # Drop detections whose BirdWeather confidence score is below this (0–1).
+    # 0 keeps everything (BirdWeather's default behaviour).
+    "min_confidence": "0",
+    # Open birdweather_snapshot.html in the default browser after a run.
+    # Off by default so scheduled/silent refreshes stay quiet.
+    "open_html": "false",
 }
 
 LABEL_STYLES = ("common", "scientific", "station")
+
+# Named canvas colours — gentle pastels that sit kindly with cream-fringed
+# illustration cutouts (see GitHub issue #12). Saturated / high-contrast
+# colours will show that fringe more clearly; that's a known subtlety.
+_BG_COLOR_PRESETS = {
+    "cream": (244, 237, 224),
+    "default": (244, 237, 224),
+    "pastel_blue": (197, 216, 232),
+    "pastelblue": (197, 216, 232),
+    "blue": (197, 216, 232),
+    "pastel_green": (214, 228, 210),
+    "pastelgreen": (214, 228, 210),
+    "green": (214, 228, 210),
+}
+
+
+def parse_bg_color(raw, fallback=(244, 237, 224)):
+    """Parse a config.ini bg_color value into an (r, g, b) tuple.
+
+    Accepts #rrggbb / #rgb hex, comma-separated decimals, or a named preset
+    (cream, pastel_blue / blue, pastel_green / green). Invalid input falls
+    back to cream so a typo never crashes a scheduled refresh."""
+    if raw is None:
+        return fallback
+    s = str(raw).strip()
+    if not s:
+        return fallback
+    key = s.lower().replace(" ", "_").replace("-", "_")
+    if key in _BG_COLOR_PRESETS:
+        return _BG_COLOR_PRESETS[key]
+    if s.startswith("#"):
+        h = s[1:]
+        if len(h) == 3 and all(c in "0123456789abcdefABCDEF" for c in h):
+            return tuple(int(c * 2, 16) for c in h)
+        if len(h) == 6 and all(c in "0123456789abcdefABCDEF" for c in h):
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        return fallback
+    if "," in s:
+        parts = [p.strip() for p in s.split(",")]
+        if len(parts) == 3:
+            try:
+                rgb = tuple(max(0, min(255, int(float(p)))) for p in parts)
+                return rgb
+            except ValueError:
+                return fallback
+    return fallback
+
+
+def rgb_to_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def warm_tint_for_bg(bg_rgb):
+    """A slightly warmer/darker companion tint for photo-fallback blending,
+    derived from the canvas colour so photo circles don't float in the wrong
+    scene when bg_color isn't cream."""
+    r, g, b = bg_rgb
+    return (
+        max(0, min(255, int(r * 0.92 + 8))),
+        max(0, min(255, int(g * 0.85 + 6))),
+        max(0, min(255, int(b * 0.75 + 4))),
+    )
 
 
 def load_user_config():
@@ -150,6 +221,7 @@ def load_runtime_config():
     (silently, for the windowed exe, which has no console to show it on)."""
     global _cfg, POSTCODE, FALLBACK_LAT, FALLBACK_LON, RADIUS_KM, DAYS
     global PERIOD_COUNT, PERIOD_UNIT, SHOW_TITLE, TITLE_TEXT, SHOW_LABELS, LABEL_STYLE
+    global BG_COLOR, BG_COLOR_HEX, MIN_CONFIDENCE, OPEN_HTML
 
     _cfg = load_user_config()
 
@@ -183,6 +255,17 @@ def load_runtime_config():
     LABEL_STYLE = (_cfg.get("label_style") or "common").strip().lower()
     if LABEL_STYLE not in LABEL_STYLES:
         LABEL_STYLE = "common"
+
+    BG_COLOR = parse_bg_color(_cfg.get("bg_color"), (244, 237, 224))
+    BG_COLOR_HEX = rgb_to_hex(BG_COLOR)
+
+    try:
+        MIN_CONFIDENCE = float((_cfg.get("min_confidence") or "0").strip() or "0")
+    except ValueError:
+        MIN_CONFIDENCE = 0.0
+    MIN_CONFIDENCE = max(0.0, min(1.0, MIN_CONFIDENCE))
+
+    OPEN_HTML = _cfg.getboolean("open_html")
 
 
 MAX_SPECIES_CARDS = 40    # Cap on how many species cards to render (HTML view)
@@ -325,30 +408,87 @@ def run_first_time_setup():
 
     messagebox.showinfo(
         "Welcome to Birdy",
-        "Birdy turns recent local bird sightings into your desktop "
-        "wallpaper. Quick one-time setup, then it runs on its own.")
+        "Birdy turns recent local bird detections (from BirdWeather "
+        "community stations) into a flock collage wallpaper.\n\n"
+        "This short setup writes config.ini next to Birdy. You can change "
+        "any answer later by editing that file — or delete it to see this "
+        "wizard again.")
 
     postcode = simpledialog.askstring(
-        "Birdy setup",
-        "Your postcode (used only to find nearby BirdWeather stations —\n"
-        "never sent anywhere except the free postcodes.io lookup):",
+        "Birdy setup — location",
+        "Your UK postcode (finds nearby BirdWeather stations via the free\n"
+        "postcodes.io lookup — never sent to Birdy servers):\n\n"
+        "Leave blank to use the built-in fallback lat/lon instead.",
         initialvalue=_DEFAULTS["postcode"])
     if postcode is None:
         postcode = ""
     postcode = postcode.strip()
 
+    radius_raw = simpledialog.askstring(
+        "Birdy setup — search radius",
+        "How far around that location to search, in kilometres?\n"
+        "(Typical garden-scale: 5–20. Wider: 30–50.)",
+        initialvalue=_DEFAULTS["radius_km"])
+    if radius_raw is None or not str(radius_raw).strip():
+        radius_km = _DEFAULTS["radius_km"]
+    else:
+        try:
+            radius_km = str(max(1, int(float(str(radius_raw).strip()))))
+        except ValueError:
+            radius_km = _DEFAULTS["radius_km"]
+
+    days_raw = simpledialog.askstring(
+        "Birdy setup — time window",
+        "How many days of detections to include?\n"
+        "(1 = last 24 hours. For a sub-day window later, set `hours` in "
+        "config.ini — e.g. hours=6.)",
+        initialvalue=_DEFAULTS["days"])
+    if days_raw is None or not str(days_raw).strip():
+        days = _DEFAULTS["days"]
+    else:
+        try:
+            days = str(max(1, int(float(str(days_raw).strip()))))
+        except ValueError:
+            days = _DEFAULTS["days"]
+
     show_title = messagebox.askyesno(
-        "Birdy setup",
-        "Show a \"Garden Visitors\" title above the collage?")
+        "Birdy setup — title",
+        "Show a \"Garden Visitors\" title above the collage?\n\n"
+        "(You can rename it later via title_text in config.ini.)")
 
     show_labels = messagebox.askyesno(
-        "Birdy setup",
-        "Show each bird's species name underneath it?")
+        "Birdy setup — labels",
+        "Show each bird's species name underneath it?\n\n"
+        "(Off by default for the clean unlabelled-flock look. Label style "
+        "— common / scientific / station — is editable in config.ini.)")
+
+    bg_raw = simpledialog.askstring(
+        "Birdy setup — background colour",
+        "Wallpaper background colour?\n\n"
+        "Leave blank for cream (#f4ede0). Or enter:\n"
+        "  • a preset: cream, pastel_blue, pastel_green\n"
+        "  • a hex colour: #c5d8e8\n"
+        "  • or r,g,b: 197,216,232\n\n"
+        "(Illustration edges were painted against cream, so gentle pastels "
+        "look best; saturated colours may show a faint cream fringe.)",
+        initialvalue="")
+    if bg_raw is None:
+        bg_raw = ""
+    bg_raw = bg_raw.strip() or _DEFAULTS["bg_color"]
+    # Prefer storing a preset name when the user typed one; otherwise hex.
+    # parse_bg_color always returns a usable RGB even on typos (falls back
+    # to cream) so a scheduled refresh never crashes on a bad value.
+    key = bg_raw.lower().replace(" ", "_").replace("-", "_")
+    parsed_bg = parse_bg_color(bg_raw, (244, 237, 224))
+    bg_color = key if key in _BG_COLOR_PRESETS else rgb_to_hex(parsed_bg)
 
     values = {
         "postcode": postcode,
+        "radius_km": radius_km,
+        "days": days,
         "show_title": "true" if show_title else "false",
         "show_labels": "true" if show_labels else "false",
+        "bg_color": bg_color,
     }
     save_user_config(values)
 
@@ -370,7 +510,7 @@ def run_first_time_setup():
                 pass  # fall back to the configured lat/lon silently
         try:
             added, already_covered = install_avianassets_pack(
-                lat, lon, RADIUS_KM, 30, ILLUSTRATIONS_DIR)
+                lat, lon, int(radius_km), 30, ILLUSTRATIONS_DIR)
             messagebox.showinfo(
                 "Birdy setup",
                 f"Added {added} illustration(s) from AvianAssets "
@@ -411,10 +551,17 @@ def run_first_time_setup():
 
     root.destroy()
 
-    global POSTCODE, SHOW_TITLE, SHOW_LABELS
+    global POSTCODE, SHOW_TITLE, SHOW_LABELS, RADIUS_KM, DAYS
+    global PERIOD_COUNT, PERIOD_UNIT, BG_COLOR, BG_COLOR_HEX
     POSTCODE = postcode or None
     SHOW_TITLE = show_title
     SHOW_LABELS = show_labels
+    RADIUS_KM = int(radius_km)
+    DAYS = int(days)
+    PERIOD_COUNT = DAYS
+    PERIOD_UNIT = "day"
+    BG_COLOR = parsed_bg
+    BG_COLOR_HEX = rgb_to_hex(parsed_bg)
 
 
 def http_post_json(url, payload, headers=None):
@@ -564,6 +711,28 @@ def dedupe_species(detection_nodes):
         reverse=True,
     )
     return ordered
+
+
+def filter_detections_by_confidence(detection_nodes, min_confidence):
+    """Drop detections whose BirdWeather `score` is below min_confidence.
+
+    Nodes with a missing score are kept (older API payloads / edge cases)
+    so a threshold never empties the flock solely because score was absent.
+    min_confidence <= 0 is a no-op."""
+    if not min_confidence or min_confidence <= 0:
+        return detection_nodes
+    kept = []
+    for node in detection_nodes:
+        score = node.get("score")
+        if score is None:
+            kept.append(node)
+            continue
+        try:
+            if float(score) >= min_confidence:
+                kept.append(node)
+        except (TypeError, ValueError):
+            kept.append(node)
+    return kept
 
 
 def relative_time(ts):
@@ -785,7 +954,7 @@ def encode_cutout_for_html(cutout, px=HTML_IMAGE_PX):
 
 
 CARD_TEMPLATE = """
-<div class="card">
+<div class="card" role="listitem">
   <div class="cutout">
     {img_html}
   </div>
@@ -812,11 +981,12 @@ PAGE_TEMPLATE = """<!doctype html>
 <meta http-equiv="refresh" content="900">
 <style>
   :root {{
-    --cream: #f4ede0;
+    --cream: {bg_hex};
     --ink: #2e2620;
-    --rust: #b5572a;
-    --moss: #5c6b47;
-    --line: #ddd0b8;
+    --rust: #9a4a24;
+    --moss: #3f4d32;
+    --line: #c9bba0;
+    --muted: #4a4034;
   }}
   * {{ box-sizing: border-box; }}
   body {{
@@ -825,6 +995,14 @@ PAGE_TEMPLATE = """<!doctype html>
     color: var(--ink);
     font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
     padding: 48px 32px 80px;
+    line-height: 1.45;
+  }}
+  a:focus-visible {{
+    outline: 3px solid var(--rust);
+    outline-offset: 2px;
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    * {{ scroll-behavior: auto !important; }}
   }}
   header {{
     max-width: 900px;
@@ -838,9 +1016,14 @@ PAGE_TEMPLATE = """<!doctype html>
     margin: 0 0 8px;
   }}
   .sub {{
-    color: #6b5f4f;
+    color: var(--muted);
     font-size: 1rem;
     margin: 0;
+  }}
+  .refresh {{
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 10px 0 0;
   }}
   .stats {{
     display: flex;
@@ -898,14 +1081,15 @@ PAGE_TEMPLATE = """<!doctype html>
   .common {{
     font-weight: 600;
     font-size: 0.95rem;
+    color: var(--ink);
   }}
   .sci {{
     font-style: italic;
     font-size: 0.78rem;
-    color: #8a7c65;
+    color: var(--muted);
   }}
   .meta {{
-    font-size: 0.72rem;
+    font-size: 0.78rem;
     color: var(--rust);
     margin-top: 2px;
   }}
@@ -913,8 +1097,8 @@ PAGE_TEMPLATE = """<!doctype html>
     max-width: 900px;
     margin: 56px auto 0;
     text-align: center;
-    font-size: 0.75rem;
-    color: #8a7c65;
+    font-size: 0.8rem;
+    color: var(--muted);
     line-height: 1.6;
   }}
   footer a {{ color: var(--rust); }}
@@ -923,15 +1107,18 @@ PAGE_TEMPLATE = """<!doctype html>
 <body>
 <header>
 {title_html}  <p class="sub">Recent detections within {radius} km of {place}, last {period_label} — via BirdWeather</p>
-  <div class="stats">
+  <p class="refresh">Last refresh: {generated}</p>
+  <div class="stats" role="group" aria-label="Detection summary">
     <span>{species_count} species</span>
     <span>{station_count} stations nearby</span>
     <span>{detection_count} detections</span>
   </div>
 </header>
-<div class="grid">
+<main>
+<div class="grid" role="list">
   {cards}
 </div>
+</main>
 <footer>
   Detections and species images courtesy of the <a href="https://app.birdweather.com">BirdWeather</a>
   community station network. Individual image credit/license shown where BirdWeather provides it.
@@ -1053,6 +1240,7 @@ def render_html(place, lat, lon, period_label, radius_km, species_list,
         detection_count=esc(detection_count),
         cards="\n".join(cards) if cards else "<p>No detections found nearby in this window.</p>",
         generated=esc(datetime.now().strftime("%Y-%m-%d %H:%M")),
+        bg_hex=esc(globals().get("BG_COLOR_HEX", "#f4ede0")),
     )
     return html
 
@@ -1088,11 +1276,32 @@ def get_screen_size():
 def load_font(names, size):
     """names is a single font-file stem, or a list tried in order — lets
     callers fall back to another elegant serif if their first choice isn't
-    installed, rather than landing on Pillow's tiny default bitmap font."""
+    installed, rather than landing on Pillow's tiny default bitmap font.
+
+    Windows font stems are tried first (Palatino/Georgia/Times). On Linux
+    and macOS those paths won't exist, so a short list of common system
+    serifs is tried next — enough for a readable title/label on a source
+    run without requiring Windows wallpaper APIs."""
     if isinstance(names, str):
         names = [names]
+    candidates = []
     for name in names:
-        path = rf"C:\Windows\Fonts\{name}.ttf"
+        candidates.append(rf"C:\Windows\Fonts\{name}.ttf")
+    # Bold / regular / italic-ish fallbacks used when the Windows stems miss.
+    candidates.extend([
+        "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Georgia.ttf",
+        "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+        "/Library/Fonts/Palatino.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+    ])
+    for path in candidates:
         if os.path.exists(path):
             try:
                 return ImageFont.truetype(path, size)
@@ -1213,29 +1422,45 @@ def add_drop_shadow(canvas, cutout, x, y, opacity=32):
     a stray dark smudge floating near the bird's edge, disconnected from
     the shape that's supposedly casting it. Eroding first drops those
     slivers from the shadow entirely, leaving only the main body mass —
-    which is what actually needs to look grounded — to cast a shadow."""
+    which is what actually needs to look grounded — to cast a shadow.
+
+    The shadow is built on a padded canvas before the Gaussian blur: without
+    that margin, Pillow clips the blur kernel at the cutout's bounding box,
+    so soft shadow edges (especially at corners) look abruptly chopped off
+    instead of feathering onto the background."""
     size = min(cutout.size)
     blur = max(5, size * 0.03)
     offset = (max(2, round(size * 0.01)), max(3, round(size * 0.018)))
     erode = max(3, round(size * 0.012)) | 1  # odd kernel size, MinFilter requires it
+    # ~3 sigma of Gaussian reach, plus the paste offset, so nothing soft
+    # gets clipped at the padded image edge either.
+    pad = int(math.ceil(blur * 3)) + max(offset) + 2
     alpha = cutout.split()[-1].filter(ImageFilter.MinFilter(erode))
-    shadow_alpha = alpha.point(lambda p: opacity if p > 0 else 0)
-    shadow = Image.new("RGBA", cutout.size, (20, 15, 10, 0))
+    eroded = alpha.point(lambda p: opacity if p > 0 else 0)
+    padded = (cutout.width + 2 * pad, cutout.height + 2 * pad)
+    shadow_alpha = Image.new("L", padded, 0)
+    shadow_alpha.paste(eroded, (pad, pad))
+    shadow = Image.new("RGBA", padded, (20, 15, 10, 0))
     shadow.putalpha(shadow_alpha)
     shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
-    canvas.paste(shadow, (x + offset[0], y + offset[1]), mask=shadow)
+    canvas.paste(shadow, (x + offset[0] - pad, y + offset[1] - pad), mask=shadow)
 
 
-def tone_photo_thumbnail(photo, size):
+def tone_photo_thumbnail(photo, size, bg_rgb=None):
     """Circular-crops a photo AND feathers the edge / desaturates / warms it
     toward the illustration palette, so photo fallbacks don't visually clash
-    with the painted cutouts sitting next to them."""
+    with the painted cutouts sitting next to them.
+
+    Tint tracks the configured canvas colour (bg_color) so photo circles
+    still sit in the same scene when the wallpaper isn't cream."""
+    if bg_rgb is None:
+        bg_rgb = globals().get("BG_COLOR", (244, 237, 224))
     circle = make_circle_thumbnail(photo, size)
     alpha = circle.split()[-1].filter(ImageFilter.GaussianBlur(2))
     rgb = circle.convert("RGB")
     rgb = ImageEnhance.Color(rgb).enhance(0.5)
     rgb = ImageEnhance.Contrast(rgb).enhance(0.92)
-    tint = Image.new("RGB", rgb.size, (224, 201, 168))
+    tint = Image.new("RGB", rgb.size, warm_tint_for_bg(bg_rgb))
     rgb = Image.blend(rgb, tint, 0.22)
     return Image.merge("RGBA", (*rgb.split(), alpha))
 
@@ -1561,11 +1786,12 @@ def _save_wallpaper_atomic(canvas, output_path):
 
 
 def render_wallpaper_image(species_list, counts, illustration_index, output_path):
-    CREAM = (244, 237, 224)
+    # Canvas colour comes from config.ini bg_color (cream by default).
+    bg = globals().get("BG_COLOR", (244, 237, 224))
     INK = (46, 38, 32)
 
     width, height = get_screen_size()
-    canvas = Image.new("RGB", (width, height), CREAM)
+    canvas = Image.new("RGB", (width, height), bg)
     draw = ImageDraw.Draw(canvas)
 
     # Palatino Linotype first — the same elegant serif family the HTML
@@ -1629,7 +1855,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
             try:
                 with Image.open(BytesIO(thumb_bytes[s["name"]])) as raw:
                     photo = raw.convert("RGB")
-                cutout = tone_photo_thumbnail(photo, 300)
+                cutout = tone_photo_thumbnail(photo, 300, bg_rgb=bg)
             except Exception as e:
                 print(f"Couldn't process thumbnail for {s['name']}: {e}")
         if cutout is None:
@@ -1727,7 +1953,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
 
             tx, ty = spot
             draw_label_with_halo(canvas, draw, (tx - bbox[0], ty - bbox[1]),
-                                  name, label_font, INK, CREAM)
+                                  name, label_font, INK, bg)
             label_rects.append((tx - LABEL_HALO_MARGIN, ty - LABEL_HALO_MARGIN,
                                  tx + tw + LABEL_HALO_MARGIN, ty + th + LABEL_HALO_MARGIN))
 
@@ -1773,11 +1999,18 @@ def main():
 
     detections = data["detections"]
     stations = data["stations"]
-    species_list = dedupe_species(detections["nodes"])
+    nodes = detections["nodes"]
+    if MIN_CONFIDENCE > 0:
+        before = len(nodes)
+        nodes = filter_detections_by_confidence(nodes, MIN_CONFIDENCE)
+        print(f"Confidence filter (>= {MIN_CONFIDENCE:g}): kept {len(nodes)}/{before} detections.")
+    species_list = dedupe_species(nodes)
 
     print(f"Found {detections['totalCount']} detections, "
           f"{detections['speciesCount']} species, "
-          f"{stations['totalCount']} stations nearby.")
+          f"{stations['totalCount']} stations nearby"
+          + (f" ({len(species_list)} species after confidence filter)" if MIN_CONFIDENCE > 0 else "")
+          + ".")
 
     # Built once and shared: this stats every file in Illustrations/, and
     # the HTML pass and the wallpaper pass were each building their own
@@ -1792,7 +2025,8 @@ def main():
         radius_km=RADIUS_KM,
         species_list=species_list,
         station_count=stations["totalCount"],
-        detection_count=detections["totalCount"],
+        detection_count=(len(nodes) if MIN_CONFIDENCE > 0
+                         else detections["totalCount"]),
         illustration_index=illustration_index,
     )
 
@@ -1815,13 +2049,22 @@ def main():
             print("Pillow isn't installed — run: pip install Pillow")
         else:
             try:
-                species_counts = count_species(detections["nodes"])
+                species_counts = count_species(nodes)
                 render_wallpaper_image(species_list, species_counts,
                                         illustration_index, OUTPUT_IMAGE)
                 platform_label = set_desktop_wallpaper(OUTPUT_IMAGE)
                 print(f"Desktop wallpaper updated directly ({platform_label}: {OUTPUT_IMAGE}).")
             except Exception as e:
                 print(f"Couldn't set desktop wallpaper: {e}")
+
+    if OPEN_HTML:
+        try:
+            import webbrowser
+            from pathlib import Path as _Path
+            webbrowser.open(_Path(OUTPUT_FILE).resolve().as_uri())
+            print(f"Opened {OUTPUT_FILE} in your browser.")
+        except Exception as e:
+            print(f"Couldn't open HTML snapshot in a browser: {e}")
 
 
 LOG_MAX_BYTES = 1_000_000   # roll over at ~1 MB, keeping one old log
