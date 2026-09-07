@@ -80,7 +80,7 @@ class CollageRenderer(
 
         data class Tile(
             val species: SpeciesDetection,
-            val bmp: Bitmap,
+            val art: Art,
             val size: Float,
             var cx: Float,
             var cy: Float,
@@ -93,13 +93,13 @@ class CollageRenderer(
 
         val tiles = mutableListOf<Tile>()
         birds.forEachIndexed { i, s ->
-            val bmp = loadArt(s) ?: return@forEachIndexed
+            val art = loadArt(s) ?: return@forEachIndexed
             val area = (scores[i] / totalScore) * budgetArea
             val size = sqrt(area).toFloat().coerceIn(width * 0.12f, width * 0.42f)
             val rnd = Random(s.name.hashCode())
             val cx = width * (0.18f + rnd.nextFloat() * 0.64f)
             val cy = topMargin + (height - topMargin) * (0.15f + rnd.nextFloat() * 0.7f)
-            tiles.add(Tile(s, bmp, size, cx, cy))
+            tiles.add(Tile(s, art, size, cx, cy))
         }
 
         // Simple spiral pack from center to reduce heavy overlap
@@ -116,7 +116,7 @@ class CollageRenderer(
 
         // Draw larger last so they sit on top
         for (t in tiles.sortedBy { it.size }) {
-            val circle = toSoftCircle(t.bmp, t.size.roundToInt())
+            val circle = toSoftCircle(t.art, t.size.roundToInt())
             val left = t.cx - circle.width / 2f
             val top = t.cy - circle.height / 2f
             // soft shadow
@@ -128,7 +128,7 @@ class CollageRenderer(
             if (settings.showLabels) {
                 canvas.drawText(t.species.name, t.cx, t.cy + circle.height * 0.55f, labelPaint)
             }
-            if (circle != t.bmp) circle.recycle()
+            if (circle != t.art.bitmap) circle.recycle()
         }
 
         // Footer credit strip
@@ -141,12 +141,16 @@ class CollageRenderer(
         return bitmap
     }
 
-    private fun loadArt(s: SpeciesDetection): Bitmap? {
+    /** Bundled illustration, or a remote photo when no illustration is bundled. */
+    data class Art(val bitmap: Bitmap, val isIllustration: Boolean)
+
+    private fun loadArt(s: SpeciesDetection): Art? {
         val local = matcher.findLocal(s.name, s.scientific)
         if (local != null) {
             try {
                 context.assets.open(local).use { stream ->
-                    return BitmapFactory.decodeStream(stream)
+                    val bmp = BitmapFactory.decodeStream(stream)
+                    if (bmp != null) return Art(bmp, isIllustration = true)
                 }
             } catch (_: Exception) {
                 // fall through to thumb
@@ -158,7 +162,8 @@ class CollageRenderer(
                 http.newCall(req).execute().use { resp ->
                     if (!resp.isSuccessful) return null
                     val bytes = resp.body?.bytes() ?: return null
-                    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+                    return Art(bmp, isIllustration = false)
                 }
             } catch (_: Exception) {
                 return null
@@ -167,15 +172,39 @@ class CollageRenderer(
         return null
     }
 
-    private fun toSoftCircle(src: Bitmap, size: Int): Bitmap {
+    /**
+     * Draws [art] into a circular tile of [size] px without ever squashing it.
+     *
+     * Illustrations are letterboxed ("contain") over their own paper colour so a
+     * wide plate keeps its wingtips and the padding is invisible; photos, which
+     * have no matching backdrop, are centre-cropped ("cover") to fill the circle.
+     */
+    private fun toSoftCircle(art: Art, size: Int): Bitmap {
+        val src = art.bitmap
         val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(out)
-        val scaled = Bitmap.createScaledBitmap(src, size, size, true)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val save = canvas.saveLayer(0f, 0f, size.toFloat(), size.toFloat(), null)
         canvas.drawCircle(size / 2f, size / 2f, size * 0.48f, paint)
         paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-        canvas.drawBitmap(scaled, 0f, 0f, paint)
+
+        val srcW = src.width.coerceAtLeast(1)
+        val srcH = src.height.coerceAtLeast(1)
+        val scale = if (art.isIllustration) {
+            min(size.toFloat() / srcW, size.toFloat() / srcH)
+        } else {
+            max(size.toFloat() / srcW, size.toFloat() / srcH)
+        }
+        val drawW = max(1, (srcW * scale).roundToInt())
+        val drawH = max(1, (srcH * scale).roundToInt())
+        if (art.isIllustration && (drawW < size || drawH < size)) {
+            // Fill the disc with the plate's own background so the letterboxing
+            // reads as part of the illustration rather than as a gap.
+            val fill = Paint(paint).apply { color = src.getPixel(0, 0) }
+            canvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), fill)
+        }
+        val scaled = Bitmap.createScaledBitmap(src, drawW, drawH, true)
+        canvas.drawBitmap(scaled, (size - drawW) / 2f, (size - drawH) / 2f, paint)
         paint.xfermode = null
         canvas.restoreToCount(save)
         if (scaled != src) scaled.recycle()

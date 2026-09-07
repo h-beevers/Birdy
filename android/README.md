@@ -14,6 +14,22 @@ Kotlin + Jetpack Compose app under this directory. Package id: `com.henrybeevers
 
 Hints: `http://192.168.1.159` (LAN) and `https://birds.henrybeevers.org` (may 403 from outside).
 
+## Illustrations
+
+Every illustration in the repo's top-level `Illustrations/` folder is bundled in
+`app/src/main/assets/illustrations/`, downscaled to fit 512 px and re-encoded as
+WebP (58 plates, ~0.9 MB). The collage only falls back to a remote BirdWeather
+photo for a species with no bundled plate — a partial bundle is what produced
+the mixed illustration/photo wallpaper.
+
+After adding or replacing art in `Illustrations/`, regenerate the assets:
+
+```bash
+pip install pillow
+python3 android/tools/sync_illustration_assets.py          # rebuild
+python3 android/tools/sync_illustration_assets.py --check  # report drift only
+```
+
 ## Build (debug)
 
 Requires JDK 17+ and Android SDK platform 35.
