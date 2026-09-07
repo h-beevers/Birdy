@@ -13,7 +13,7 @@ Shared contract with desktop GraphQL / dedupe / illustration matching:
 | BirdWeather public GraphQL detections | Works (same query as desktop) |
 | `min_confidence` filter → dedupe → cap 60 | Works (per shared contract) |
 | Local flock collage (Kotlin Canvas/Bitmap) | Works (spiral/overlap circles; simpler than desktop Pillow packer) |
-| Bundled `Illustrations/` subset + thumb fallback | Works |
+| Bundled `Illustrations/` (full set, WebP) + thumb fallback | Works |
 | Home wallpaper (`WallpaperManager` / `FLAG_SYSTEM`) | Works |
 | Lock wallpaper (`FLAG_LOCK`, API 24+) | Requested; **OEM may ignore** (Samsung/Xiaomi/etc.) |
 | WorkManager periodic refresh | Works (user hours; floor 15 min; Doze may delay) |
