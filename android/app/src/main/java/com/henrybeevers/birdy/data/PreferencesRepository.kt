@@ -31,6 +31,7 @@ class PreferencesRepository(private val context: Context) {
         val SET_LOCK = booleanPreferencesKey("set_lock")
         val FIRST_RUN = booleanPreferencesKey("first_run_done")
         val BIRDNET = stringPreferencesKey("birdnet_url")
+        val GB_PACK = booleanPreferencesKey("download_gb_pack")
         val LAST_STATUS = stringPreferencesKey("last_status")
         val LAST_ERROR = stringPreferencesKey("last_error")
     }
@@ -51,6 +52,7 @@ class PreferencesRepository(private val context: Context) {
             setLock = p[Keys.SET_LOCK] ?: true,
             firstRunDone = p[Keys.FIRST_RUN] ?: false,
             birdnetUrl = p[Keys.BIRDNET] ?: "",
+            downloadGbPack = p[Keys.GB_PACK] ?: true,
         )
     }
 
@@ -72,6 +74,7 @@ class PreferencesRepository(private val context: Context) {
             p[Keys.SET_LOCK] = s.setLock
             p[Keys.FIRST_RUN] = s.firstRunDone
             p[Keys.BIRDNET] = s.birdnetUrl.trim()
+            p[Keys.GB_PACK] = s.downloadGbPack
         }
     }
 

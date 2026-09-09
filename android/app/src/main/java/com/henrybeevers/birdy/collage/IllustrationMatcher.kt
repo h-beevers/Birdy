@@ -9,7 +9,16 @@ import java.util.Locale
  * slugify + word-boundary fuzzy + mtime tie-break.
  * Asset mtimes are fake (index order); bundled assets have equal "mtime".
  */
-class IllustrationMatcher(private val assets: AssetManager) {
+class IllustrationMatcher private constructor(
+    private val listNames: (String) -> List<String>,
+) {
+    constructor(assets: AssetManager) : this({ dir ->
+        try {
+            assets.list(dir)?.toList().orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    })
 
     data class Entry(
         val assetPath: String,
@@ -25,11 +34,7 @@ class IllustrationMatcher(private val assets: AssetManager) {
         if (index != null) return
         val map = mutableMapOf<String, Entry>()
         val list = mutableListOf<Entry>()
-        val names = try {
-            assets.list(assetDir)?.toList().orEmpty()
-        } catch (_: Exception) {
-            emptyList()
-        }
+        val names = listNames(assetDir)
         names.forEachIndexed { i, fname ->
             val lower = fname.lowercase(Locale.US)
             if (!lower.endsWith(".png") && !lower.endsWith(".jpg") &&
@@ -114,5 +119,8 @@ class IllustrationMatcher(private val assets: AssetManager) {
         }
 
         fun fromContext(context: Context) = IllustrationMatcher(context.assets)
+
+        /** Matcher over a fixed list of filenames — used by the unit tests. */
+        fun forNames(names: List<String>) = IllustrationMatcher { names }
     }
 }

@@ -223,7 +223,12 @@ no Python), sets **home** and **lock** wallpapers via `WallpaperManager`, and
 refreshes with **WorkManager**. Status text shows “Using BirdNET-Pi” vs
 “Using BirdWeather (fallback)”.
 
-### Build debug / signed release
+### Get an APK
+
+Grab the APK from the [Releases page](../../releases) (assets named
+`Birdy-debug.apk` / `Birdy.apk`) — every `android-v*` tag builds and attaches
+one via [the Android workflow](.github/workflows/build-android.yml). Or build
+it yourself.
 
 Requires JDK 17+ and Android SDK (platform 35). Full steps (including signed
 APK/AAB and `adb install`): **`android/README.md`**.
@@ -239,9 +244,10 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties   # or set ANDROID_HOME
 ### Install via adb
 
 ```bash
-# Debug
+# From a release download
+adb install -r Birdy-debug.apk
+# From a local build
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-# Signed release
 adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -249,6 +255,20 @@ On first run, enter a UK postcode (and optional BirdNET-Pi URL such as
 `http://192.168.1.159` or `https://birds.henrybeevers.org`) and tap
 **Build collage & set wallpaper**. Allow **set wallpaper** when Android
 prompts. Public BirdNET-Pi hosts may 403 off-LAN — BirdWeather is the fallback.
+
+### Bird art on Android
+
+Birdy's own illustrations are bundled in the APK, so the collage is painted art
+out of the box. Species Birdy has no plate for are filled from the **GB
+illustration pack** (~300 UK species from
+[AvianAssets](https://github.com/jonnywright/AvianAssets)), which the app
+downloads **on your device** — Settings → *GB illustration pack* → *Get nearby
+birds* / *Get all*, or left to top itself up as new birds turn up. That pack is
+not bundled in the release: it is not covered by this repo's GPL-3.0 and ships
+no licence of its own, so Birdy fetches it from the source rather than
+redistributing it. Cached plates are ~40 KB each (~12 MB for the whole pack) and
+**Clear** removes them. Anything neither source covers still falls back to a
+BirdWeather photo.
 
 ### OEM lock-screen note
 
@@ -259,7 +279,8 @@ WorkManager periods are at least 15 minutes and may be delayed by Doze.
 ### Privacy (Play-ready later)
 
 On-device preferences only; network calls to BirdNET-Pi (if configured),
-BirdWeather + postcodes.io disclosed; no ads; uninstall deletes local data.
+BirdWeather + postcodes.io, and raw.githubusercontent.com (only when fetching
+GB illustration-pack plates) disclosed; no ads; uninstall deletes local data.
 Not listed on Play yet. Never commit keystores or `key.properties`.
 
 
@@ -320,6 +341,10 @@ If you want the whole set at once rather than picking individual files:
 overwrite, since it's the same art you'd get from a fresh install anyway.
 
 ### Importing UK illustrations from AvianAssets
+
+**If you're using the Android app**, this is built in — Settings → *GB
+illustration pack* downloads the same art onto the phone, no script needed
+(see [Bird art on Android](#bird-art-on-android)).
 
 **If you're using Birdy.exe**, the first-run setup wizard already offers to
 do this for you (the "nearby, top up what's missing" mode below) — you only

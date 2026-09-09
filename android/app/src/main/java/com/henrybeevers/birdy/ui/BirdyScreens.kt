@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.henrybeevers.birdy.BirdyApp
 import com.henrybeevers.birdy.collage.CollageRenderer
+import com.henrybeevers.birdy.collage.GbIllustrationPack
 import com.henrybeevers.birdy.data.DetectionFetcher
 import com.henrybeevers.birdy.data.BirdySettings
 import com.henrybeevers.birdy.data.PreferencesRepository
@@ -247,6 +248,12 @@ fun SettingsScreen(
             singleLine = true,
         )
 
+        GbPackCard(
+            enabled = draft.downloadGbPack,
+            onEnabledChange = { draft = draft.copy(downloadGbPack = it) },
+            settings = draft,
+        )
+
         message?.let { Text(it) }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -286,6 +293,120 @@ fun SettingsScreen(
     }
 }
 
+/**
+ * The GB illustration pack (AvianAssets) is downloaded on the device rather
+ * than bundled in the APK — see [GbIllustrationPack] for why — so it needs its
+ * own bit of UI: what's cached, and a way to fetch or drop it.
+ */
+@Composable
+private fun GbPackCard(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    settings: BirdySettings,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pack = remember { GbIllustrationPack(context) }
+    val total = remember { pack.species().size }
+    var installed by remember { mutableStateOf(pack.installedCount()) }
+    var megabytes by remember { mutableStateOf(pack.bytesOnDisk() / 1_000_000f) }
+    var packBusy by remember { mutableStateOf(false) }
+    var packNote by remember { mutableStateOf<String?>(null) }
+
+    fun refreshCounts() {
+        installed = pack.installedCount()
+        megabytes = pack.bytesOnDisk() / 1_000_000f
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("GB illustration pack", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "$installed of $total plates on this phone (${"%.1f".format(megabytes)} MB). " +
+                    "Downloaded from AvianAssets on your device — not bundled in the app, " +
+                    "so its artwork stays under its own terms.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            CheckRow("Fetch missing plates as birds turn up", enabled, onEnabledChange)
+            packNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    enabled = !packBusy,
+                    onClick = {
+                        packBusy = true
+                        packNote = "Looking up nearby species…"
+                        scope.launch {
+                            try {
+                                val result = withContext(Dispatchers.IO) {
+                                    val nearby = DetectionFetcher().fetch(settings)
+                                    val wanted = nearby.species.map { it.scientific }
+                                        .filter { it.isNotBlank() }
+                                    pack.downloadAll(wanted) { p ->
+                                        packNote = if (p.species.isBlank()) {
+                                            "Finishing…"
+                                        } else {
+                                            "Downloading ${p.done + 1}/${p.total}: ${p.species}"
+                                        }
+                                    }
+                                }
+                                packNote = result.message
+                            } catch (e: Exception) {
+                                packNote = e.message ?: "Download failed"
+                            } finally {
+                                refreshCounts()
+                                packBusy = false
+                            }
+                        }
+                    },
+                ) { Text("Get nearby birds") }
+                TextButton(
+                    enabled = !packBusy,
+                    onClick = {
+                        packBusy = true
+                        packNote = "Downloading the whole pack…"
+                        scope.launch {
+                            try {
+                                val result = withContext(Dispatchers.IO) {
+                                    pack.downloadAll(
+                                        pack.species().map { GbIllustrationPack.displayName(it) },
+                                    ) { p ->
+                                        packNote = if (p.species.isBlank()) {
+                                            "Finishing…"
+                                        } else {
+                                            "Downloading ${p.done + 1}/${p.total}: ${p.species}"
+                                        }
+                                    }
+                                }
+                                packNote = result.message
+                            } catch (e: Exception) {
+                                packNote = e.message ?: "Download failed"
+                            } finally {
+                                refreshCounts()
+                                packBusy = false
+                            }
+                        }
+                    },
+                ) { Text("Get all ($total)") }
+                TextButton(
+                    enabled = !packBusy && installed > 0,
+                    onClick = {
+                        scope.launch {
+                            val removed = withContext(Dispatchers.IO) { pack.clear() }
+                            refreshCounts()
+                            packNote = "Removed $removed plates"
+                        }
+                    },
+                ) { Text("Clear") }
+            }
+            Text(
+                "\"Get all\" pulls ~$total plates (a few hundred MB of downloads, " +
+                    "stored at about 40 KB each). Wi-Fi recommended.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
 @Composable
 private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -300,13 +421,15 @@ suspend fun runRefresh(
     settings: BirdySettings,
 ): String {
     val nearby = DetectionFetcher().fetch(settings)
-    val bmp = CollageRenderer(context).render(nearby.species, settings)
+    val rendered = CollageRenderer(context).renderDetailed(nearby.species, settings)
+    val bmp = rendered.bitmap
     File(context.filesDir, "last_collage.jpg").outputStream().use {
         bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it)
     }
     val wall = WallpaperApplier(context).apply(bmp, settings.setHome, settings.setLock)
     val msg =
-        "${nearby.sourceStatus} · OK ${nearby.species.size} species · ${nearby.placeName} · ${wall.message}"
+        "${nearby.sourceStatus} · OK ${nearby.species.size} species · ${nearby.placeName} · " +
+            "${rendered.illustrated} illustrated / ${rendered.photos} photo · ${wall.message}"
     prefs.setStatus(msg)
     return msg
 }
