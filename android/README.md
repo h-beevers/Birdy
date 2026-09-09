@@ -122,12 +122,18 @@ $ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs app/build/output
 ## Releases from CI
 
 `.github/workflows/build-android.yml` runs the unit tests and builds the app on
-every push/PR that touches `android/`. Pushing an **`android-v*`** tag also
-publishes a GitHub Release with the APKs attached:
+every push to `main` and every PR that touches `android/`. Pushing a **`v*`**
+tag — the same tag the Windows exe releases on, so one tag ships both — or an
+**`android-v*`** tag attaches the APKs to that release:
 
 ```bash
-git tag android-v1.1.0 && git push origin android-v1.1.0
+git tag v1.1.0 && git push origin v1.1.0
 ```
+
+To add APKs to a release that already exists (or to rebuild them), run the
+workflow by hand: **Actions → Build Android APK → Run workflow**, with
+`release_tag` set to that release's tag. The APKs are appended to the release's
+existing notes and assets rather than replacing them.
 
 - `Birdy-debug.apk` — debug-signed, always attached, sideloads as
   `com.henrybeevers.birdy.debug`.
