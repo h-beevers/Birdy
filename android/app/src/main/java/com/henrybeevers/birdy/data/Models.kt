@@ -45,4 +45,10 @@ data class BirdySettings(
     val firstRunDone: Boolean = false,
     /** BirdNET-Pi base URL; when non-blank, preferred over BirdWeather. */
     val birdnetUrl: String = "",
+    /**
+     * Fetch missing plates from the GB illustration pack (AvianAssets) as
+     * species turn up, instead of falling back to a BirdWeather photo. The
+     * pack is downloaded on this device, never bundled in the APK.
+     */
+    val downloadGbPack: Boolean = true,
 )

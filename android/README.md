@@ -16,19 +16,63 @@ Hints: `http://192.168.1.159` (LAN) and `https://birds.henrybeevers.org` (may 40
 
 ## Illustrations
 
-Every illustration in the repo's top-level `Illustrations/` folder is bundled in
-`app/src/main/assets/illustrations/`, downscaled to fit 512 px and re-encoded as
-WebP (58 plates, ~0.9 MB). The collage only falls back to a remote BirdWeather
-photo for a species with no bundled plate — a partial bundle is what produced
-the mixed illustration/photo wallpaper.
-
-After adding or replacing art in `Illustrations/`, regenerate the assets:
+**Birdy's own art** — every file in the repo's top-level `Illustrations/`
+folder — is bundled in `app/src/main/assets/illustrations/`, downscaled to fit
+512 px and re-encoded as WebP (58 plates, ~0.9 MB). Regenerate after adding or
+replacing art:
 
 ```bash
 pip install pillow
 python3 android/tools/sync_illustration_assets.py          # rebuild
 python3 android/tools/sync_illustration_assets.py --check  # report drift only
 ```
+
+**The GB pack** (~300 UK species from
+[jonnywright/AvianAssets](https://github.com/jonnywright/AvianAssets), the same
+pack `import_avianassets_illustrations.py` pulls on the desktop) is *not*
+bundled in the APK. That pack ships no licence of its own and is not covered by
+this repo's GPL-3.0, so putting its artwork in a release would be a
+redistribution this repo has no permission to make. Instead the app downloads
+plates straight from that repo, on the user's own device, into
+`filesDir/gb_illustrations`:
+
+- automatically for species that turn up with no bundled plate, while
+  **Settings → GB illustration pack → Fetch missing plates** is on (default), or
+- in bulk via **Get nearby birds** / **Get all** in the same card.
+
+Each plate is re-encoded to a 512 px WebP on arrival (alpha kept — they are
+cutouts), so a full pack costs ~12 MB on disk. **Clear** deletes the lot.
+
+To keep the phone off the GitHub API, the app ships a plain-text index of the
+pack's species (`app/src/main/assets/gb_pack_manifest.txt`, one
+scientific-name slug per line) and joins the raw URL itself. Species names are
+facts, not artwork, so the index carries no licence baggage. Refresh it when
+the pack gains species:
+
+```bash
+python3 android/tools/sync_gb_pack_manifest.py          # rebuild
+python3 android/tools/sync_gb_pack_manifest.py --check  # report drift only
+```
+
+Order of preference when drawing a bird: bundled Birdy plate → cached GB plate
+→ freshly downloaded GB plate → BirdWeather photo. The status line reports the
+split, e.g. `26 illustrated / 2 photo`.
+
+## Collage
+
+Geometry lives in `collage/CollageLayout.kt` — count-weighted tile sizing,
+golden-angle (phyllotaxis) packing, then a relaxation pass that pushes
+overlapping tiles apart and back inside the canvas. It has no Android types in
+it, so `./gradlew testDebugUnitTest` checks the layout, the illustration
+matching and the pack index on a plain JVM.
+
+`CollageRenderer` draws each tile in whichever way its art wants:
+
+| Art | Drawn as |
+|---|---|
+| Transparent cutout (GB pack plate) | as-is, no disc, soft ellipse shadow |
+| Opaque plate (Birdy's own art) | letterboxed inside a disc over its own paper colour |
+| BirdWeather photo | centre-cropped to fill a disc |
 
 ## Build (debug)
 
@@ -74,6 +118,27 @@ Verify signing:
 ```bash
 $ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
 ```
+
+## Releases from CI
+
+`.github/workflows/build-android.yml` runs the unit tests and builds the app on
+every push/PR that touches `android/`. Pushing an **`android-v*`** tag also
+publishes a GitHub Release with the APKs attached:
+
+```bash
+git tag android-v1.1.0 && git push origin android-v1.1.0
+```
+
+- `Birdy-debug.apk` — debug-signed, always attached, sideloads as
+  `com.henrybeevers.birdy.debug`.
+- `Birdy.apk` — release build signed with the repo's upload key, attached only
+  when the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+  `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` repository secrets are set
+  (`base64 -w0 birdy-upload.jks` for the first). Without them the release build
+  is unsigned and attached as `Birdy-unsigned.apk`.
+
+The keystore itself never lives in the repo — CI writes `key.properties` from
+the secrets and deletes it again in the same job.
 
 ## Install release via adb
 

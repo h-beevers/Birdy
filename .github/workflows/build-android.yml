@@ -1,0 +1,115 @@
+name: Build Android APK
+
+# Builds the sideload APK so nobody needs Android Studio to get one. Runs the
+# unit tests plus a debug build on every push/PR that touches the app (smoke
+# test, artifact only), and additionally publishes a GitHub Release with the
+# APK attached when an android version tag (android-v*) is pushed.
+#
+# Signing: if the repo has the ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD
+# / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD secrets set, the release APK is
+# signed with that upload key. Without them the release build is unsigned and
+# only the debug-signed APK is attached, which still sideloads fine.
+
+on:
+  push:
+    branches: [main]
+    tags: ["android-v*"]
+    paths:
+      - "android/**"
+      - ".github/workflows/build-android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/build-android.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    env:
+      # Step-level `if` can't read the secrets context, so surface them here.
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests (collage geometry, illustration matching, GB pack index)
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Set up release signing
+        id: signing
+        if: env.ANDROID_KEYSTORE_BASE64 != ''
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/birdy-upload.jks"
+          cat > key.properties <<EOF
+          storeFile=$RUNNER_TEMP/birdy-upload.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/Birdy-debug.apk
+          release_apk=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          if [ -n "$release_apk" ]; then
+            if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+              cp "$release_apk" dist/Birdy.apk
+            else
+              cp "$release_apk" dist/Birdy-unsigned.apk
+            fi
+          fi
+          ls -l dist
+
+      - name: Drop the signing material
+        if: always()
+        run: rm -f key.properties "$RUNNER_TEMP/birdy-upload.jks"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Birdy-android
+          path: android/dist/*.apk
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/dist/*.apk
+          body: |
+            Birdy for Android (sideload).
+
+            `Birdy-debug.apk` is debug-signed and installs with
+            `adb install -r Birdy-debug.apk`; it uses the package id
+            `com.henrybeevers.birdy.debug`, so it sits alongside a release
+            build rather than replacing it. `Birdy.apk`, when present, is the
+            release build signed with the repo's upload key.
+
+            Bird art: Birdy's own plates are bundled in the APK. The ~300-species
+            GB pack from https://github.com/jonnywright/AvianAssets is **not**
+            bundled — the app downloads it on your device (Settings → GB
+            illustration pack), so that artwork stays under its own terms.

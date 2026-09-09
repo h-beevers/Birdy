@@ -33,13 +33,15 @@ class RefreshWorker(
             val settings = prefs.current()
             val nearby = DetectionFetcher().fetch(settings)
             val collage = CollageRenderer(applicationContext)
-            val bmp = collage.render(nearby.species, settings)
+            val rendered = collage.renderDetailed(nearby.species, settings)
+            val bmp = rendered.bitmap
             // Persist last collage for preview
             val out = File(applicationContext.filesDir, "last_collage.jpg")
             FileOutputStream(out).use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
             val wall = WallpaperApplier(applicationContext).apply(bmp, settings.setHome, settings.setLock)
             prefs.setStatus(
-                "${nearby.sourceStatus} · OK ${nearby.species.size} species near ${nearby.placeName} · ${wall.message}",
+                "${nearby.sourceStatus} · OK ${nearby.species.size} species near ${nearby.placeName} · " +
+                    "${rendered.illustrated} illustrated / ${rendered.photos} photo · ${wall.message}",
             )
             Log.i(TAG, wall.message)
             Result.success()

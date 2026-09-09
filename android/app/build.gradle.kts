@@ -20,8 +20,8 @@ android {
         applicationId = "com.henrybeevers.birdy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2-sideload"
+        versionCode = 4
+        versionName = "1.1.0-sideload"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -66,6 +66,17 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests {
+            // The collage geometry and pack index are plain Kotlin, but the
+            // classes around them touch android.* — default returns keep those
+            // stubs quiet instead of throwing.
+            isReturnDefaultValues = true
+            // The asset tests read the real bundled files off disk, so pin the
+            // working directory rather than relying on the default.
+            all { test -> test.workingDir = projectDir }
+        }
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -89,4 +100,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }
