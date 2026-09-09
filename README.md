@@ -226,9 +226,9 @@ refreshes with **WorkManager**. Status text shows “Using BirdNET-Pi” vs
 ### Get an APK
 
 Grab the APK from the [Releases page](../../releases) (assets named
-`Birdy-debug.apk` / `Birdy.apk`) — every `android-v*` tag builds and attaches
-one via [the Android workflow](.github/workflows/build-android.yml). Or build
-it yourself.
+`Birdy-debug.apk` / `Birdy.apk`) — every version tag builds and attaches one
+via [the Android workflow](.github/workflows/build-android.yml), alongside the
+Windows exe. Or build it yourself.
 
 Requires JDK 17+ and Android SDK (platform 35). Full steps (including signed
 APK/AAB and `adb install`): **`android/README.md`**.
