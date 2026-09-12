@@ -31,6 +31,14 @@ class BirdWeatherApi(
         const val FALLBACK_LAT = 53.93
         const val FALLBACK_LON = -1.45
 
+        /**
+         * Encode a UK postcode for the `/postcodes/{postcode}` path.
+         * [URLEncoder] turns spaces into `+`, which postcodes.io treats as a
+         * literal plus in the path (and 404s). Percent-encode spaces as `%20`.
+         */
+        fun encodePostcodePath(postcode: String): String =
+            URLEncoder.encode(postcode.trim(), "UTF-8").replace("+", "%20")
+
         private val DETECTIONS_QUERY = """
             query recentNearby(${'$'}ne: InputLocation, ${'$'}sw: InputLocation, ${'$'}period: InputDuration, ${'$'}first: Int) {
               detections(ne: ${'$'}ne, sw: ${'$'}sw, period: ${'$'}period, first: ${'$'}first) {
@@ -72,7 +80,7 @@ class BirdWeatherApi(
             return LatLonPlace(FALLBACK_LAT, FALLBACK_LON, "fallback")
         }
         return try {
-            val url = POSTCODES.format(URLEncoder.encode(trimmed, "UTF-8"))
+            val url = POSTCODES.format(encodePostcodePath(trimmed))
             val req = Request.Builder()
                 .url(url)
                 .header("User-Agent", USER_AGENT)

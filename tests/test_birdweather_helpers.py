@@ -34,6 +34,86 @@ class ConfidenceFilterTests(unittest.TestCase):
         self.assertEqual(len(b.filter_detections_by_confidence(nodes, 0)), 4)
 
 
+class PeriodFromHoursTests(unittest.TestCase):
+    def test_blank_and_zero_use_days(self):
+        self.assertEqual(b.period_from_hours_and_days("", 3), (3, "day"))
+        self.assertEqual(b.period_from_hours_and_days(None, 3), (3, "day"))
+        self.assertEqual(b.period_from_hours_and_days("0", 3), (3, "day"))
+        self.assertEqual(b.period_from_hours_and_days("-1", 3), (3, "day"))
+        self.assertEqual(b.period_from_hours_and_days("12h", 3), (3, "day"))
+
+    def test_positive_hours_override_days(self):
+        self.assertEqual(b.period_from_hours_and_days("12", 3), (12, "hour"))
+        self.assertEqual(b.period_from_hours_and_days(" 6 ", 1), (6, "hour"))
+
+
+class DedupeSpeciesTests(unittest.TestCase):
+    def test_dated_detection_replaces_undated(self):
+        nodes = [
+            {"timestamp": None, "species": {"commonName": "Robin"}},
+            {"timestamp": "2026-09-12T10:00:00Z", "species": {"commonName": "Robin"}},
+        ]
+        out = b.dedupe_species(nodes)
+        self.assertEqual(len(out), 1)
+        self.assertIsNotNone(out[0]["ts"])
+
+    def test_newer_timestamp_wins(self):
+        nodes = [
+            {"timestamp": "2026-09-12T08:00:00Z", "species": {"commonName": "Robin"}},
+            {"timestamp": "2026-09-12T11:00:00Z", "species": {"commonName": "Robin"}},
+        ]
+        out = b.dedupe_species(nodes)
+        self.assertEqual(out[0]["ts_raw"], "2026-09-12T11:00:00Z")
+
+
+class PercentInConfigTests(unittest.TestCase):
+    def test_percent_in_title_does_not_crash(self):
+        import tempfile
+        td = tempfile.mkdtemp()
+        path = os.path.join(td, "config.ini")
+        old = b.CONFIG_PATH
+        try:
+            b.CONFIG_PATH = path
+            b.save_user_config({"title_text": "Birds 100%"})
+            cfg = b.load_user_config()
+            self.assertEqual(cfg.get("title_text"), "Birds 100%")
+        finally:
+            b.CONFIG_PATH = old
+
+
+class SaveConfigMergeTests(unittest.TestCase):
+    def test_preserves_keys_not_in_payload(self):
+        import tempfile
+        td = tempfile.mkdtemp()
+        path = os.path.join(td, "config.ini")
+        old = b.CONFIG_PATH
+        try:
+            b.CONFIG_PATH = path
+            b.save_user_config({
+                "postcode": "SW1A 1AA",
+                "fallback_lat": "51.5",
+                "fallback_lon": "-0.12",
+            })
+            b.save_user_config({"postcode": "E1 6AN", "title_text": "Hi"})
+            cfg = b.load_user_config()
+            self.assertEqual(cfg.get("postcode"), "E1 6AN")
+            self.assertEqual(cfg.get("fallback_lat"), "51.5")
+            self.assertEqual(cfg.get("fallback_lon"), "-0.12")
+            self.assertEqual(cfg.get("title_text"), "Hi")
+        finally:
+            b.CONFIG_PATH = old
+
+
+class SafeDownloadUrlTests(unittest.TestCase):
+    def test_http_https_only(self):
+        self.assertTrue(b.is_safe_download_url("https://example.com/a.png"))
+        self.assertTrue(b.is_safe_download_url("http://example.com/a.png"))
+        self.assertFalse(b.is_safe_download_url("file:///etc/passwd"))
+        self.assertFalse(b.is_safe_download_url("javascript:alert(1)"))
+        self.assertFalse(b.is_safe_download_url("data:image/png;base64,xx"))
+        self.assertFalse(b.is_safe_download_url(""))
+
+
 class DropShadowPaddingTests(unittest.TestCase):
     def test_soft_alpha_exists_outside_cutout_box(self):
         # Full opaque cutout (content cropped tight to edges) — the case

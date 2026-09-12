@@ -7,19 +7,22 @@ name: Build Windows exe
 
 on:
   push:
+    # No paths filter on push: a tag push carries no file diff of its own,
+    # so a filtered trigger can skip the very release build it exists for
+    # (same trap build-android.yml already dropped in #32).
     branches: [main]
     tags: ["v*"]
-    paths:
-      - "birdweather_local.py"
-      - "birdy.spec"
-      - "requirements.txt"
-      - "Illustrations/**"
-      - ".github/workflows/build-exe.yml"
   pull_request:
     paths:
       - "birdweather_local.py"
+      - "birdy_wallpaper.py"
+      - "birdy_settings_gui.py"
+      - "rename_latin_illustrations.py"
       - "birdy.spec"
       - "requirements.txt"
+      - "tests/**"
+      - "Illustrations/**"
+      - ".github/workflows/build-exe.yml"
   workflow_dispatch: {}
 
 permissions:
@@ -39,6 +42,9 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
 
       - name: Build Birdy.exe
         run: pyinstaller birdy.spec

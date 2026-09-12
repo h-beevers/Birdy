@@ -192,17 +192,35 @@ def warm_tint_for_bg(bg_rgb):
     )
 
 
+def _config_parser():
+    # interpolation=None: a title like "Birds 100%" is a valid user string,
+    # not a ConfigParser interpolation token. The default interpolator
+    # crashes load_runtime_config (and every scheduled refresh) on '%'.
+    return configparser.ConfigParser(interpolation=None)
+
+
 def load_user_config():
-    parser = configparser.ConfigParser()
+    parser = _config_parser()
     parser["birdy"] = dict(_DEFAULTS)
     if os.path.exists(CONFIG_PATH):
-        parser.read(CONFIG_PATH)
+        parser.read(CONFIG_PATH, encoding="utf-8")
     return parser["birdy"]
 
 
 def save_user_config(values):
-    parser = configparser.ConfigParser()
-    parser["birdy"] = {**_DEFAULTS, **values}
+    """Write config.ini, keeping keys the caller didn't mention.
+
+    The settings GUI only sends the fields it edits. Replacing the whole
+    file from _DEFAULTS + that payload used to wipe hand-edited keys
+    (fallback_lat / fallback_lon, anything added later)."""
+    parser = _config_parser()
+    existing = {}
+    if os.path.exists(CONFIG_PATH):
+        current = _config_parser()
+        current.read(CONFIG_PATH, encoding="utf-8")
+        if current.has_section("birdy"):
+            existing = dict(current["birdy"])
+    parser["birdy"] = {**_DEFAULTS, **existing, **values}
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         parser.write(f)
 
@@ -236,13 +254,8 @@ def load_runtime_config():
     # "6", "1") — BirdWeather's API takes a {count, unit} duration either way,
     # so this just swaps which unit gets sent instead of bolting on a separate
     # code path. Leave `hours` blank (the default) to use DAYS as before.
-    hours_raw = (_cfg.get("hours") or "").strip()
-    if hours_raw:
-        PERIOD_COUNT = int(hours_raw)
-        PERIOD_UNIT = "hour"
-    else:
-        PERIOD_COUNT = DAYS
-        PERIOD_UNIT = "day"
+    PERIOD_COUNT, PERIOD_UNIT = period_from_hours_and_days(
+        _cfg.get("hours"), DAYS)
 
     # Show a title above the collage, and what it reads.
     SHOW_TITLE = _cfg.getboolean("show_title")
@@ -633,6 +646,23 @@ query recentNearby($ne: InputLocation, $sw: InputLocation, $period: InputDuratio
 """
 
 
+def period_from_hours_and_days(hours_raw, days):
+    """hours overrides days only when it is a positive integer.
+
+    Blank, 0, or a typo ("12h") all fall back to days so a scheduled
+    refresh never runs a zero-length window or crashes on a bad value.
+    Android uses the same hours > 0 rule."""
+    raw = ("" if hours_raw is None else str(hours_raw)).strip()
+    if raw:
+        try:
+            hours = int(raw)
+        except (TypeError, ValueError):
+            hours = 0
+        if hours > 0:
+            return hours, "hour"
+    return days, "day"
+
+
 def format_period(count, unit):
     return f"{count} {unit}" + ("" if count == 1 else "s")
 
@@ -693,7 +723,10 @@ def dedupe_species(detection_nodes):
         if not name:
             continue
         ts = parse_timestamp(node.get("timestamp"))
-        if name not in best or (ts and best[name]["ts"] and ts > best[name]["ts"]):
+        prev = best.get(name)
+        # Prefer a dated detection over an undated one (Android already did).
+        # `ts and prev["ts"] and ts > prev["ts"]` kept the undated row forever.
+        if prev is None or (ts is not None and (prev["ts"] is None or ts > prev["ts"])):
             best[name] = {
                 "name": name,
                 "scientific": species.get("scientificName") or "",
@@ -2031,18 +2064,21 @@ def main():
     )
 
     tmp_file = OUTPUT_FILE + ".tmp"
+    html_written = False
     try:
         with open(tmp_file, "w", encoding="utf-8") as f:
             f.write(html)
         os.replace(tmp_file, OUTPUT_FILE)
+        html_written = True
     except PermissionError as e:
         print(f"\nCouldn't write {OUTPUT_FILE}: {e}")
         print("This usually means another program (e.g. Lively Wallpaper, a text "
               "editor, or a browser tab) has the file open and locked. Close it, "
               "or pause Lively Wallpaper, and try again.")
-        return
+        print("Continuing with the wallpaper anyway.")
 
-    print(f"Written to {OUTPUT_FILE} — open it in a browser.")
+    if html_written:
+        print(f"Written to {OUTPUT_FILE} — open it in a browser.")
 
     if SET_DESKTOP_WALLPAPER:
         if not PIL_AVAILABLE:
@@ -2057,7 +2093,7 @@ def main():
             except Exception as e:
                 print(f"Couldn't set desktop wallpaper: {e}")
 
-    if OPEN_HTML:
+    if OPEN_HTML and html_written:
         try:
             import webbrowser
             from pathlib import Path as _Path
