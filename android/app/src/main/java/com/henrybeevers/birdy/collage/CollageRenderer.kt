@@ -182,7 +182,8 @@ class CollageRenderer(
             }
         }
         // 4. Last resort: BirdWeather's own photo thumbnail.
-        if (s.thumb.isNotBlank()) {
+        // Same http(s)-only gate as desktop is_safe_download_url().
+        if (isHttpUrl(s.thumb)) {
             val bytes = try {
                 val req = Request.Builder().url(s.thumb).get().build()
                 http.newCall(req).execute().use { resp ->
@@ -293,6 +294,12 @@ class CollageRenderer(
     companion object {
         /** Beyond this the tiles are too small to read as birds. */
         const val MAX_BIRDS = 60
+
+        /** Same http(s)-only gate as desktop `is_safe_download_url()`. */
+        fun isHttpUrl(url: String): Boolean {
+            val t = url.trim().lowercase(LocaleAware)
+            return t.startsWith("http://") || t.startsWith("https://")
+        }
 
         fun parseBgColor(raw: String, fallback: Int = Color.rgb(244, 237, 224)): Int {
             val s = raw.trim().lowercase(LocaleAware)

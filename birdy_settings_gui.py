@@ -184,9 +184,11 @@ def open_settings_gui(parent=None):
         hours = hours_var.get().strip()
         if hours:
             try:
-                int(hours)
+                hours_int = int(hours)
             except ValueError as e:
                 raise ValueError("hours must be a whole number, or blank.") from e
+            if hours_int <= 0:
+                hours = ""
         style = (label_style_var.get() or "common").strip().lower()
         if style not in app.LABEL_STYLES:
             style = "common"
