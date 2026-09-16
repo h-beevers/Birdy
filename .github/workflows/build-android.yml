@@ -58,6 +58,11 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default package list still asks for the obsolete
+          # `tools` package, which Google removed from the SDK repository:
+          # `sdkmanager tools` now fails the job before Gradle ever runs.
+          packages: platform-tools
 
       - uses: gradle/actions/setup-gradle@v4
 
