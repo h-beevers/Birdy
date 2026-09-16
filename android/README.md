@@ -61,17 +61,20 @@ split, e.g. `26 illustrated / 2 photo`.
 ## Collage
 
 Geometry lives in `collage/CollageLayout.kt` — count-weighted tile sizing,
-golden-angle (phyllotaxis) packing, then a relaxation pass that pushes
-overlapping tiles apart and back inside the canvas. It has no Android types in
-it, so `./gradlew testDebugUnitTest` checks the layout, the illustration
-matching and the pack index on a plain JVM.
+then centre-out spiral packing with real silhouette collision (the same shape
+as the desktop Pillow packer): birds nest into each other's gaps, and the whole
+flock is shrunk and repacked if anything lands off-canvas. The spiral is biased
+along the canvas's long axis, so a portrait phone fills top-to-bottom. It has
+no Android types in it, so `./gradlew testDebugUnitTest` checks the layout, the
+paper keying, the illustration matching and the pack index on a plain JVM.
 
 `CollageRenderer` draws each tile in whichever way its art wants:
 
 | Art | Drawn as |
 |---|---|
 | Transparent cutout (GB pack plate) | as-is, no disc, soft ellipse shadow |
-| Opaque plate (Birdy's own art) | letterboxed inside a disc over its own paper colour |
+| Opaque plate (Birdy's own art) | paper keyed out by `PaperKey`, then drawn as a cutout |
+| Plate with no flat paper to key | letterboxed inside a disc over its own paper colour |
 | BirdWeather photo | centre-cropped to fill a disc |
 
 ## Build (debug)

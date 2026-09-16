@@ -1,11 +1,12 @@
 package com.henrybeevers.birdy.collage
 
-import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -14,13 +15,43 @@ import kotlin.math.sqrt
  * tested on the JVM (the drawing itself lives in [CollageRenderer]).
  *
  * Mirrors the desktop packer's shape: count-weighted tile sizing normalised
- * against an area budget, packed centre-out, then relaxed apart so tiles
- * overlap like a flock rather than stacking into a pile.
+ * against an area budget, then packed centre-out on a spiral using real
+ * silhouette collision — birds nest into each other's gaps the way they do
+ * on the desktop wallpaper, rather than being scattered and then shoved
+ * apart as bounding circles (which left them visibly piled on top of one
+ * another on a phone-shaped canvas).
  */
 object CollageLayout {
 
     /** Where one bird ends up, in pixels, on the collage canvas. */
-    data class Placement(val index: Int, val cx: Float, val cy: Float, val size: Float)
+    data class Placement(
+        val index: Int,
+        val cx: Float,
+        val cy: Float,
+        val w: Float,
+        val h: Float,
+    )
+
+    /**
+     * A tile's shape, downsampled from its alpha channel: the collision test
+     * works on this rather than the bounding box, so a magpie's tail can
+     * slide under a rook's belly instead of reserving a whole square.
+     */
+    class Silhouette(val cells: BooleanArray, val gw: Int, val gh: Int) {
+        operator fun get(gx: Int, gy: Int): Boolean =
+            gx in 0 until gw && gy in 0 until gh && cells[gy * gw + gx]
+
+        /** Fraction of the grid the shape actually covers. */
+        val coverage: Float get() = cells.count { it } / max(1, cells.size).toFloat()
+    }
+
+    /** One bird waiting to be packed: its natural box, and its shape. */
+    data class Tile(
+        val index: Int,
+        val w: Float,
+        val h: Float,
+        val silhouette: Silhouette? = null,
+    )
 
     /** How a given piece of art wants to be drawn into its tile. */
     enum class TileStyle {
@@ -47,13 +78,15 @@ object CollageLayout {
      *
      * Sizes are normalised against [budgetFraction] of the drawable area, so
      * the flock covers a similar share of the wallpaper whether there are
-     * three birds or thirty.
+     * three birds or thirty. The budget runs ahead of the area the flock
+     * actually ends up covering: the packer no longer lets birds overlap, so
+     * roughly half of it is spent on the gaps between them.
      */
     fun tileSizes(
         counts: List<Int>,
         width: Int,
         drawableHeight: Float,
-        budgetFraction: Double = 0.62,
+        budgetFraction: Double = 0.70,
         minFraction: Float = 0.10f,
         maxFraction: Float = 0.40f,
     ): List<Float> {
@@ -77,75 +110,215 @@ object CollageLayout {
     }
 
     /**
-     * Packs [sizes] centre-out on a golden-angle (phyllotaxis) spiral, then
-     * relaxes overlapping tiles apart and pulls everything back inside the
-     * canvas.
-     *
-     * Phyllotaxis rather than a fixed-step spiral because the radius grows as
-     * `sqrt(i)`: tile 40 lands just outside tile 39 instead of a canvas-width
-     * away, so a big flock still fills the middle of the wallpaper.
-     *
-     * Tiles are placed largest-first so the loudest birds hold the centre.
+     * Builds a tile box from an edge length and the art's own aspect ratio,
+     * so a long-tailed magpie is drawn long rather than squeezed into the
+     * same square as a robin.
      */
-    fun placeTiles(
-        sizes: List<Float>,
+    fun tileBox(size: Float, artW: Int, artH: Int): Pair<Float, Float> {
+        val w = max(1, artW).toFloat()
+        val h = max(1, artH).toFloat()
+        val scale = size / max(w, h)
+        return w * scale to h * scale
+    }
+
+    /**
+     * Packs [tiles] centre-out on a spiral, largest first, rejecting any
+     * position whose silhouette touches an already-placed bird. If anything
+     * ends up off-canvas the whole flock is shrunk and repacked — the same
+     * shrink-and-retry the desktop packer uses.
+     *
+     * The spiral is biased along the canvas's long axis, so a portrait phone
+     * fills top-to-bottom instead of piling everything across the middle.
+     */
+    fun packFlock(
+        tiles: List<Tile>,
         width: Int,
         top: Float,
         bottom: Float,
-        passes: Int = 24,
-        seed: Long = 7L,
+        maxIterations: Int = 12,
+        shrinkFactor: Float = 0.93f,
     ): List<Placement> {
-        if (sizes.isEmpty()) return emptyList()
-        val order = sizes.indices.sortedByDescending { sizes[it] }
+        if (tiles.isEmpty()) return emptyList()
         val centerX = width / 2f
         val centerY = (top + bottom) / 2f
         val spanX = max(1f, width.toFloat())
         val spanY = max(1f, bottom - top)
-        // Radius that would fit every tile's area inside the canvas, spread out
-        // by the usual phyllotaxis packing constant.
-        val totalArea = sizes.sumOf { (it * it).toDouble() }
-        val spread = sqrt(totalArea / PI).toFloat() * 0.92f
-        val maxRadius = max(spread, sizes.max() * 0.6f)
-        val golden = (PI * (3.0 - sqrt(5.0))).toFloat() // ~2.39996 rad
+        val biasX = if (spanX >= spanY) (spanX / spanY).coerceAtMost(2.2f) else 1f
+        val biasY = if (spanY > spanX) (spanY / spanX).coerceAtMost(2.2f) else 1f
+        val maxRadius = hypot(spanX, spanY) * 0.75f
+        val ordered = tiles.sortedByDescending { it.w * it.h }
 
-        val xs = FloatArray(sizes.size)
-        val ys = FloatArray(sizes.size)
-        val aspect = spanY / spanX
-        order.forEachIndexed { rank, idx ->
-            val t = if (sizes.size == 1) 0f else sqrt(rank / (sizes.size - 1f))
-            val radius = maxRadius * t
-            val angle = golden * rank + (seed % 360) * 0.01f
-            xs[idx] = centerX + cos(angle) * radius
-            ys[idx] = centerY + sin(angle) * radius * aspect.coerceIn(0.6f, 1.8f)
+        var scale = 1f
+        var best: List<Placement> = emptyList()
+        repeat(maxIterations) {
+            val placed = ArrayList<Placed>(ordered.size)
+            var overflowed = false
+            for ((rank, tile) in ordered.withIndex()) {
+                val w = tile.w * scale
+                val h = tile.h * scale
+                var spot = Placed(tile.index, centerX - w / 2f, centerY - h / 2f, w, h, tile.silhouette)
+                if (rank > 0) {
+                    var theta = 0.0
+                    var radius = 0.0
+                    var found = false
+                    var hint = 0
+                    while (radius < maxRadius) {
+                        theta += 0.13
+                        radius = 2.6 * theta
+                        val cx = centerX + (radius * cos(theta)).toFloat() * biasX
+                        val cy = centerY + (radius * sin(theta)).toFloat() * biasY
+                        val candidate = Placed(tile.index, cx - w / 2f, cy - h / 2f, w, h, tile.silhouette)
+                        // Whatever blocked the last spiral step usually blocks
+                        // this one too — retest it first so the scan below can
+                        // bail on its first comparison.
+                        if (hint < placed.size && collide(candidate, placed[hint])) {
+                            spot = candidate
+                            continue
+                        }
+                        var blocked = false
+                        for (i in placed.indices) {
+                            if (i == hint) continue
+                            if (collide(candidate, placed[i])) {
+                                hint = i
+                                blocked = true
+                                break
+                            }
+                        }
+                        spot = candidate
+                        if (!blocked) {
+                            found = true
+                            break
+                        }
+                    }
+                    if (!found) overflowed = true
+                }
+                if (spot.x < 0f || spot.y < top ||
+                    spot.x + spot.w > width || spot.y + spot.h > bottom
+                ) {
+                    overflowed = true
+                }
+                placed.add(spot)
+            }
+            best = placed.map { Placement(it.index, it.x + it.w / 2f, it.y + it.h / 2f, it.w, it.h) }
+                .sortedBy { it.index }
+            if (!overflowed) return best
+            scale *= shrinkFactor
         }
+        // Best effort: nudge whatever still hangs off the edge back inside.
+        return best.map {
+            it.copy(
+                cx = clampAxis(it.cx, it.w, 0f, width.toFloat()),
+                cy = clampAxis(it.cy, it.h, top, bottom),
+            )
+        }
+    }
 
-        // Relax: push overlapping pairs apart, but only enough to leave the
-        // flock touching — a little overlap is the look, a pile is not.
-        val minGap = 0.50f // fraction of the two tiles' combined half-sizes
-        repeat(passes) {
-            for (a in sizes.indices) {
-                for (b in a + 1 until sizes.size) {
-                    val dx = xs[b] - xs[a]
-                    val dy = ys[b] - ys[a]
-                    val dist = sqrt(dx * dx + dy * dy).coerceAtLeast(0.001f)
-                    val want = (sizes[a] + sizes[b]) / 2f * minGap
-                    if (dist >= want) continue
-                    val push = (want - dist) / 2f
-                    val ux = dx / dist
-                    val uy = dy / dist
-                    xs[a] -= ux * push
-                    ys[a] -= uy * push
-                    xs[b] += ux * push
-                    ys[b] += uy * push
+    private class Placed(
+        val index: Int,
+        val x: Float,
+        val y: Float,
+        val w: Float,
+        val h: Float,
+        val silhouette: Silhouette?,
+    )
+
+    /** Silhouette overlap between two placed tiles, bounding box first. */
+    private fun collide(a: Placed, b: Placed, samples: Int = 15): Boolean {
+        val x0 = max(a.x, b.x)
+        val x1 = min(a.x + a.w, b.x + b.w)
+        val y0 = max(a.y, b.y)
+        val y1 = min(a.y + a.h, b.y + b.h)
+        if (x1 <= x0 || y1 <= y0) return false
+        val sa = a.silhouette ?: return true
+        val sb = b.silhouette ?: return true
+        for (iy in 0 until samples) {
+            val py = y0 + (y1 - y0) * (iy + 0.5f) / samples
+            for (ix in 0 until samples) {
+                val px = x0 + (x1 - x0) * (ix + 0.5f) / samples
+                if (!lookup(sa, a, px, py)) continue
+                if (lookup(sb, b, px, py)) return true
+            }
+        }
+        return false
+    }
+
+    private fun lookup(s: Silhouette, t: Placed, px: Float, py: Float): Boolean {
+        val gx = ((px - t.x) / t.w * s.gw).toInt()
+        val gy = ((py - t.y) / t.h * s.gh).toInt()
+        return s[gx, gy]
+    }
+
+    /**
+     * Downsamples an ARGB image's alpha channel into a collision grid, then
+     * pads it outward by one cell so packed birds keep a sliver of daylight
+     * between them instead of touching at the pixel edge.
+     */
+    fun silhouetteFrom(
+        pixels: IntArray,
+        srcW: Int,
+        srcH: Int,
+        gridW: Int = 26,
+        alphaThreshold: Int = 96,
+    ): Silhouette {
+        val w = max(1, srcW)
+        val h = max(1, srcH)
+        val gw = max(1, min(gridW, w))
+        val gh = max(1, (gw * h.toFloat() / w).roundToInt())
+        val raw = BooleanArray(gw * gh)
+        for (gy in 0 until gh) {
+            val y0 = gy * h / gh
+            val y1 = max(y0 + 1, (gy + 1) * h / gh)
+            for (gx in 0 until gw) {
+                val x0 = gx * w / gw
+                val x1 = max(x0 + 1, (gx + 1) * w / gw)
+                var hit = false
+                var y = y0
+                loop@ while (y < y1) {
+                    var x = x0
+                    while (x < x1) {
+                        if ((pixels[y * w + x] ushr 24) > alphaThreshold) {
+                            hit = true
+                            break@loop
+                        }
+                        x++
+                    }
+                    y++
+                }
+                raw[gy * gw + gx] = hit
+            }
+        }
+        return Silhouette(dilate(raw, gw, gh), gw, gh)
+    }
+
+    /** A filled disc grid — what a circular photo thumbnail collides with. */
+    fun discSilhouette(gridW: Int = 26): Silhouette {
+        val cells = BooleanArray(gridW * gridW)
+        val r = gridW / 2f
+        for (y in 0 until gridW) {
+            for (x in 0 until gridW) {
+                val dx = x + 0.5f - r
+                val dy = y + 0.5f - r
+                cells[y * gridW + x] = dx * dx + dy * dy <= r * r
+            }
+        }
+        return Silhouette(cells, gridW, gridW)
+    }
+
+    private fun dilate(cells: BooleanArray, gw: Int, gh: Int): BooleanArray {
+        val out = BooleanArray(cells.size)
+        for (y in 0 until gh) {
+            for (x in 0 until gw) {
+                if (!cells[y * gw + x]) continue
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        val ny = y + dy
+                        val nx = x + dx
+                        if (ny in 0 until gh && nx in 0 until gw) out[ny * gw + nx] = true
+                    }
                 }
             }
-            for (i in sizes.indices) {
-                xs[i] = clampAxis(xs[i], sizes[i], 0f, width.toFloat())
-                ys[i] = clampAxis(ys[i], sizes[i], top, bottom)
-            }
         }
-
-        return sizes.indices.map { Placement(it, xs[it], ys[it], sizes[it]) }
+        return out
     }
 
     /**
@@ -175,26 +348,26 @@ object CollageLayout {
         bottom: Float,
         tolerance: Float = 0.5f,
     ): Boolean = placements.all {
-        val half = it.size / 2f
-        val fitsX = it.size > width || (it.cx - half >= -tolerance && it.cx + half <= width + tolerance)
-        val fitsY = it.size > (bottom - top) ||
-            (it.cy - half >= top - tolerance && it.cy + half <= bottom + tolerance)
+        val fitsX = it.w > width ||
+            (it.cx - it.w / 2f >= -tolerance && it.cx + it.w / 2f <= width + tolerance)
+        val fitsY = it.h > (bottom - top) ||
+            (it.cy - it.h / 2f >= top - tolerance && it.cy + it.h / 2f <= bottom + tolerance)
         fitsX && fitsY
     }
 
-    /** Worst overlap between any two tiles, as a fraction of their mean size. */
+    /** Worst bounding-box overlap between any two tiles, 0..1 of the smaller. */
     fun worstOverlapFraction(placements: List<Placement>): Float {
         var worst = 0f
         for (a in placements.indices) {
             for (b in a + 1 until placements.size) {
                 val p = placements[a]
                 val q = placements[b]
-                val dist = sqrt(
-                    (p.cx - q.cx) * (p.cx - q.cx) + (p.cy - q.cy) * (p.cy - q.cy),
-                )
-                val mean = (p.size + q.size) / 2f
-                if (mean <= 0f) continue
-                worst = max(worst, ((mean - dist) / mean).coerceAtLeast(0f))
+                val ox = min(p.cx + p.w / 2f, q.cx + q.w / 2f) - max(p.cx - p.w / 2f, q.cx - q.w / 2f)
+                val oy = min(p.cy + p.h / 2f, q.cy + q.h / 2f) - max(p.cy - p.h / 2f, q.cy - q.h / 2f)
+                if (ox <= 0f || oy <= 0f) continue
+                val smaller = min(p.w * p.h, q.w * q.h)
+                if (smaller <= 0f) continue
+                worst = max(worst, (ox * oy) / smaller)
             }
         }
         return worst
