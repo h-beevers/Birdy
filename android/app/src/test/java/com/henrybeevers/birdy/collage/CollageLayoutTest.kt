@@ -7,9 +7,10 @@ import org.junit.Test
 /**
  * The collage geometry, checked without a device.
  *
- * These cover the two ways the layout has actually gone wrong: tiles pushed
- * off-canvas (the old fixed-step spiral put everything past the edge once a
- * flock got past ~20 birds) and tiles landing on top of each other.
+ * These cover the ways the layout has actually gone wrong: tiles pushed
+ * off-canvas, tiles landing on top of each other, and — the phone-only
+ * failure — birds drawn piled over one another instead of packed into a
+ * collage the way the desktop wallpaper arranges them.
  */
 class CollageLayoutTest {
 
@@ -20,11 +21,33 @@ class CollageLayoutTest {
     private fun sizesFor(counts: List<Int>) =
         CollageLayout.tileSizes(counts, width, bottom - top)
 
+    /** A plausible bird shape: an oval that leaves the tile's corners empty. */
+    private fun birdSilhouette(gw: Int = 26, gh: Int = 18): CollageLayout.Silhouette {
+        val pixels = IntArray(gw * gh)
+        for (y in 0 until gh) {
+            for (x in 0 until gw) {
+                val dx = (x + 0.5f) / gw - 0.5f
+                val dy = (y + 0.5f) / gh - 0.5f
+                val inside = (dx * dx) / 0.25f + (dy * dy) / 0.25f <= 1f
+                pixels[y * gw + x] = if (inside) 0xFF804020.toInt() else 0
+            }
+        }
+        return CollageLayout.silhouetteFrom(pixels, gw, gh, gridW = gw)
+    }
+
+    private fun tilesFor(counts: List<Int>): List<CollageLayout.Tile> {
+        val sizes = sizesFor(counts)
+        return sizes.mapIndexed { i, size ->
+            val (w, h) = CollageLayout.tileBox(size, 26, 18)
+            CollageLayout.Tile(i, w, h, birdSilhouette())
+        }
+    }
+
     @Test
     fun `every tile stays on the canvas for flocks of any size`() {
         for (n in listOf(1, 2, 5, 12, 30, CollageRendererLimits.MAX)) {
             val counts = List(n) { it % 7 + 1 }
-            val placements = CollageLayout.placeTiles(sizesFor(counts), width, top, bottom)
+            val placements = CollageLayout.packFlock(tilesFor(counts), width, top, bottom)
             assertEquals(n, placements.size)
             assertTrue(
                 "flock of $n put a tile off-canvas",
@@ -34,8 +57,14 @@ class CollageLayoutTest {
     }
 
     @Test
-    fun `tiles do not stack on top of each other`() {
-        val placements = CollageLayout.placeTiles(sizesFor(List(24) { 3 }), width, top, bottom)
+    fun `placements come back in the order they were handed in`() {
+        val placements = CollageLayout.packFlock(tilesFor(List(9) { it + 1 }), width, top, bottom)
+        assertEquals((0 until 9).toList(), placements.map { it.index })
+    }
+
+    @Test
+    fun `birds are packed into a collage, not piled on top of each other`() {
+        val placements = CollageLayout.packFlock(tilesFor(List(24) { 3 }), width, top, bottom)
         for (a in placements.indices) {
             for (b in a + 1 until placements.size) {
                 assertTrue(
@@ -44,12 +73,46 @@ class CollageLayoutTest {
                 )
             }
         }
-        // Overlap is the look, a pile is not: no pair may sit more than
-        // two-thirds on top of another.
+        // Silhouettes may nest into each other's corners, but no bird may sit
+        // half-buried under a neighbour the way the old relaxed-circle layout
+        // left them on a phone-shaped canvas.
         assertTrue(
             "tiles overlap too heavily",
-            CollageLayout.worstOverlapFraction(placements) < 0.67f,
+            CollageLayout.worstOverlapFraction(placements) < 0.34f,
         )
+    }
+
+    @Test
+    fun `the flock fills the canvas rather than hugging the middle`() {
+        val placements = CollageLayout.packFlock(tilesFor(List(18) { 4 }), width, top, bottom)
+        val spreadY = placements.maxOf { it.cy } - placements.minOf { it.cy }
+        assertTrue(
+            "flock only used ${spreadY.toInt()}px of a ${(bottom - top).toInt()}px canvas",
+            spreadY > (bottom - top) * 0.45f,
+        )
+    }
+
+    @Test
+    fun `a tile keeps the art's aspect ratio`() {
+        val (w, h) = CollageLayout.tileBox(300f, 800, 400)
+        assertEquals(300f, w, 0.5f)
+        assertEquals(150f, h, 0.5f)
+    }
+
+    @Test
+    fun `a silhouette follows the art's shape, not its bounding box`() {
+        val sil = birdSilhouette()
+        assertTrue("an oval should not fill its whole grid", sil.coverage < 0.95f)
+        assertTrue("an oval should cover most of its middle row", sil.coverage > 0.5f)
+        assertTrue("the centre of the bird is solid", sil[sil.gw / 2, sil.gh / 2])
+        assertTrue("the corner of the tile is empty", !sil[0, 0])
+    }
+
+    @Test
+    fun `a disc silhouette is round`() {
+        val disc = CollageLayout.discSilhouette(20)
+        assertTrue(disc[10, 10])
+        assertTrue(!disc[0, 0])
     }
 
     @Test
@@ -100,7 +163,7 @@ class CollageLayoutTest {
     @Test
     fun `an empty flock lays out to nothing rather than crashing`() {
         assertTrue(CollageLayout.tileSizes(emptyList(), width, bottom - top).isEmpty())
-        assertTrue(CollageLayout.placeTiles(emptyList(), width, top, bottom).isEmpty())
+        assertTrue(CollageLayout.packFlock(emptyList(), width, top, bottom).isEmpty())
     }
 
     private object CollageRendererLimits {

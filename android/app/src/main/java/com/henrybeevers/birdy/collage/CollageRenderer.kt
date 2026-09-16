@@ -15,14 +15,18 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Intentional flock-style collage (simpler than desktop Pillow packer):
- * cream/pastel canvas, overlapping tiles sized by log(count), local
- * illustrations preferred over BirdWeather thumbs.
+ * Flock-style collage, matching the desktop Pillow packer's look: cream
+ * canvas, birds as cutouts packed centre-out until they nest against each
+ * other, local illustrations preferred over BirdWeather thumbs.
  *
- * Geometry lives in [CollageLayout] so it can be unit tested without a device.
+ * Geometry lives in [CollageLayout] so it can be unit tested without a device,
+ * and the paper behind an opaque plate is keyed out by [PaperKey] rather than
+ * masked into a disc — the discs were what put pale circles behind half the
+ * birds on the phone wallpaper.
  */
 class CollageRenderer(
     private val context: Context,
@@ -83,12 +87,7 @@ class CollageRenderer(
 
         val birds = species.take(MAX_BIRDS)
         if (birds.isEmpty()) {
-            val empty = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = ink
-                textAlign = Paint.Align.CENTER
-                textSize = width * 0.04f
-            }
-            canvas.drawText("No detections nearby", width / 2f, height / 2f, empty)
+            drawNotice(canvas, "No detections nearby", width, height, ink)
             return Rendered(bitmap, illustrated = 0, photos = 0, downloaded = 0)
         }
 
@@ -99,12 +98,7 @@ class CollageRenderer(
             s to art
         }
         if (loaded.isEmpty()) {
-            val empty = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = ink
-                textAlign = Paint.Align.CENTER
-                textSize = width * 0.04f
-            }
-            canvas.drawText("No artwork available yet", width / 2f, height / 2f, empty)
+            drawNotice(canvas, "No artwork available yet", width, height, ink)
             return Rendered(bitmap, illustrated = 0, photos = 0, downloaded = downloaded)
         }
 
@@ -113,21 +107,31 @@ class CollageRenderer(
             width = width,
             drawableHeight = bottomMargin - topMargin,
         )
-        val placements = CollageLayout.placeTiles(
-            sizes = sizes,
+        val tiles = loaded.mapIndexed { i, (_, art) ->
+            val style = CollageLayout.styleFor(art.isIllustration, art.hasAlpha)
+            if (style == CollageLayout.TileStyle.CUTOUT) {
+                val (w, h) = CollageLayout.tileBox(sizes[i], art.bitmap.width, art.bitmap.height)
+                CollageLayout.Tile(i, w, h, silhouetteOf(art.bitmap))
+            } else {
+                // A disc tile is square and collides as a circle.
+                CollageLayout.Tile(i, sizes[i], sizes[i], CollageLayout.discSilhouette())
+            }
+        }
+        val placements = CollageLayout.packFlock(
+            tiles = tiles,
             width = width,
             top = topMargin,
             bottom = bottomMargin,
         )
 
-        // Draw the largest last so the loudest birds sit on top of the flock.
-        for (p in placements.sortedBy { it.size }) {
+        // Draw the largest last so the loudest birds sit on top where the
+        // packer had to let two silhouettes touch.
+        for (p in placements.sortedBy { it.w * it.h }) {
             val (detection, art) = loaded[p.index]
-            val size = p.size.roundToInt().coerceAtLeast(1)
             val style = CollageLayout.styleFor(art.isIllustration, art.hasAlpha)
-            drawTile(canvas, art, style, p.cx, p.cy, size)
+            drawTile(canvas, art, style, p)
             if (settings.showLabels) {
-                canvas.drawText(detection.name, p.cx, p.cy + size * 0.56f, labelPaint)
+                canvas.drawText(detection.name, p.cx, p.cy + p.h * 0.58f, labelPaint)
             }
         }
         loaded.forEach { (_, art) -> if (!art.bitmap.isRecycled) art.bitmap.recycle() }
@@ -147,6 +151,15 @@ class CollageRenderer(
         )
     }
 
+    private fun drawNotice(canvas: Canvas, text: String, width: Int, height: Int, ink: Int) {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = ink
+            textAlign = Paint.Align.CENTER
+            textSize = width * 0.04f
+        }
+        canvas.drawText(text, width / 2f, height / 2f, paint)
+    }
+
     /** Bundled illustration, downloaded GB plate, or a remote photo. */
     data class Art(
         val bitmap: Bitmap,
@@ -159,25 +172,20 @@ class CollageRenderer(
         // 1. Birdy's own bundled plate — hand-picked, so it wins.
         matcher.findLocal(s.name, s.scientific)?.let { assetPath ->
             decode { context.assets.open(assetPath).use { it.readBytes() } }?.let { bmp ->
-                return Art(bmp, isIllustration = true, hasAlpha = bmp.hasAlpha())
+                return illustration(bmp)
             }
         }
         // 2. A GB pack plate already on this device.
         pack.cached(s.scientific)?.let { file ->
             decode { file.readBytes() }?.let { bmp ->
-                return Art(bmp, isIllustration = true, hasAlpha = bmp.hasAlpha())
+                return illustration(bmp)
             }
         }
         // 3. Fetch one from the GB pack, if the user has that turned on.
         if (allowPackDownload) {
             pack.ensure(s.scientific)?.let { file ->
                 decode { file.readBytes() }?.let { bmp ->
-                    return Art(
-                        bmp,
-                        isIllustration = true,
-                        hasAlpha = bmp.hasAlpha(),
-                        fromPackDownload = true,
-                    )
+                    return illustration(bmp, fromPackDownload = true)
                 }
             }
         }
@@ -198,6 +206,77 @@ class CollageRenderer(
         return null
     }
 
+    /**
+     * Prepares an illustration for the flock: an opaque plate has its paper
+     * keyed out so it becomes a cutout like every other bird, and any cutout
+     * is trimmed to its own ink so the packer reserves the bird's space, not
+     * the exporter's margins.
+     */
+    private fun illustration(source: Bitmap, fromPackDownload: Boolean = false): Art {
+        val prepared = cutoutOf(source)
+        return Art(
+            bitmap = prepared,
+            isIllustration = true,
+            hasAlpha = prepared.hasAlpha(),
+            fromPackDownload = fromPackDownload,
+        )
+    }
+
+    /**
+     * Returns [source] as a transparent cutout when it can: keys out flat
+     * paper, then trims the transparent margin. Falls back to the original
+     * bitmap (drawn as a disc plate) when the art has no flat background to
+     * key — a full-bleed painting, say.
+     */
+    private fun cutoutOf(source: Bitmap): Bitmap {
+        val w = source.width
+        val h = source.height
+        if (w <= 2 || h <= 2 || w.toLong() * h > MAX_KEY_PIXELS) return source
+        val pixels = try {
+            IntArray(w * h).also { source.getPixels(it, 0, w, 0, 0, w, h) }
+        } catch (_: Exception) {
+            return source
+        }
+        val alreadyCutout = source.hasAlpha() && hasTransparency(pixels)
+        val keyed = alreadyCutout || PaperKey.removePaper(pixels, w, h)
+        if (!keyed) return source
+
+        val bounds = PaperKey.opaqueBounds(pixels, w, h) ?: return source
+        val bx = bounds[0]
+        val by = bounds[1]
+        val bw = bounds[2]
+        val bh = bounds[3]
+        val out = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+        val row = IntArray(bw)
+        for (y in 0 until bh) {
+            System.arraycopy(pixels, (by + y) * w + bx, row, 0, bw)
+            out.setPixels(row, 0, bw, 0, y, bw, 1)
+        }
+        if (!source.isRecycled) source.recycle()
+        return out
+    }
+
+    private fun hasTransparency(pixels: IntArray): Boolean =
+        pixels.any { (it ushr 24) < 250 }
+
+    private fun silhouetteOf(bmp: Bitmap): CollageLayout.Silhouette? {
+        val w = bmp.width
+        val h = bmp.height
+        if (w < 1 || h < 1) return null
+        // Sample at grid resolution rather than pulling a full-size frame in.
+        val gw = min(SILHOUETTE_GRID, w)
+        val gh = max(1, (gw * h.toFloat() / w).roundToInt())
+        val small = try {
+            Bitmap.createScaledBitmap(bmp, gw, gh, true)
+        } catch (_: Exception) {
+            return null
+        }
+        val pixels = IntArray(gw * gh)
+        small.getPixels(pixels, 0, gw, 0, 0, gw, gh)
+        if (small != bmp) small.recycle()
+        return CollageLayout.silhouetteFrom(pixels, gw, gh, gridW = gw)
+    }
+
     private inline fun decode(read: () -> ByteArray): Bitmap? = try {
         val bytes = read()
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
@@ -208,46 +287,42 @@ class CollageRenderer(
     /**
      * Draws one bird, in whichever way its art wants to be drawn.
      *
-     * A cutout (transparent PNG, e.g. a GB pack plate) is drawn straight onto
-     * the canvas: masking it into a disc would clip its own wingtips, and the
-     * old paper-fill trick would have painted a fully transparent corner pixel
-     * over the disc and erased the bird outright. An opaque plate keeps the
-     * disc — letterboxed over its own paper colour so the padding is
-     * invisible — and a photo is centre-cropped to fill one.
+     * A cutout — which is now every illustration whose paper could be keyed
+     * out — is drawn straight onto the canvas at its own aspect ratio, with a
+     * soft ellipse under it for grounding. Only art with no flat background to
+     * key (and a remote photo) still gets a disc.
      */
     private fun drawTile(
         canvas: Canvas,
         art: Art,
         style: CollageLayout.TileStyle,
-        cx: Float,
-        cy: Float,
-        size: Int,
+        p: CollageLayout.Placement,
     ) {
         val src = art.bitmap
         if (style == CollageLayout.TileStyle.CUTOUT) {
-            val scale = CollageLayout.containScale(src.width, src.height, size)
-            val w = max(1, (src.width * scale).roundToInt())
-            val h = max(1, (src.height * scale).roundToInt())
+            val w = max(1, p.w.roundToInt())
+            val h = max(1, p.h.roundToInt())
             val scaled = Bitmap.createScaledBitmap(src, w, h, true)
             // A soft ellipse under the bird instead of a hard disc: a cutout
             // has no plate behind it, so a full circle would read as a blob.
             val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(28, 30, 20, 10) }
             canvas.drawOval(
-                cx - w * 0.34f,
-                cy + h * 0.30f,
-                cx + w * 0.34f,
-                cy + h * 0.46f,
+                p.cx - w * 0.34f,
+                p.cy + h * 0.30f,
+                p.cx + w * 0.34f,
+                p.cy + h * 0.46f,
                 shadow,
             )
-            canvas.drawBitmap(scaled, cx - w / 2f, cy - h / 2f, null)
+            canvas.drawBitmap(scaled, p.cx - w / 2f, p.cy - h / 2f, null)
             if (scaled != src) scaled.recycle()
             return
         }
 
+        val size = max(1, min(p.w, p.h).roundToInt())
         val disc = toSoftCircle(art, style, size)
         val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(50, 30, 20, 10) }
-        canvas.drawCircle(cx + 6f, cy + 8f, disc.width * 0.42f, shadow)
-        canvas.drawBitmap(disc, cx - disc.width / 2f, cy - disc.height / 2f, null)
+        canvas.drawCircle(p.cx + 6f, p.cy + 8f, disc.width * 0.42f, shadow)
+        canvas.drawBitmap(disc, p.cx - disc.width / 2f, p.cy - disc.height / 2f, null)
         if (disc != src) disc.recycle()
     }
 
@@ -294,6 +369,12 @@ class CollageRenderer(
     companion object {
         /** Beyond this the tiles are too small to read as birds. */
         const val MAX_BIRDS = 60
+
+        /** Collision grid width — matches [CollageLayout.silhouetteFrom]. */
+        private const val SILHOUETTE_GRID = 26
+
+        /** Plates bigger than this aren't worth a full-frame key on a phone. */
+        private const val MAX_KEY_PIXELS = 4_500_000L
 
         /** Same http(s)-only gate as desktop `is_safe_download_url()`. */
         fun isHttpUrl(url: String): Boolean {
