@@ -36,6 +36,7 @@ class CollageRenderer(
         .readTimeout(20, TimeUnit.SECONDS)
         .build(),
     private val pack: GbIllustrationPack = GbIllustrationPack(context, http),
+    private val classic: ClassicPlatePack = ClassicPlatePack(context, http),
 ) {
 
     /** A finished collage, plus what it was actually drawn from. */
@@ -44,46 +45,60 @@ class CollageRenderer(
         val illustrated: Int,
         val photos: Int,
         val downloaded: Int,
+        /** How many of [illustrated] are classic (Fugleramme) plates. */
+        val classic: Int = 0,
     )
 
     fun render(
         species: List<SpeciesDetection>,
         settings: BirdySettings,
-        width: Int = 1080,
-        height: Int = 1920,
+        width: Int = WallpaperCanvas.FALLBACK.width,
+        height: Int = WallpaperCanvas.FALLBACK.height,
     ): Bitmap = renderDetailed(species, settings, width, height).bitmap
 
     fun renderDetailed(
         species: List<SpeciesDetection>,
         settings: BirdySettings,
-        width: Int = 1080,
-        height: Int = 1920,
+        width: Int = WallpaperCanvas.FALLBACK.width,
+        height: Int = WallpaperCanvas.FALLBACK.height,
     ): Rendered {
         val bg = parseBgColor(settings.bgColor)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(bg)
 
+        // Everything is placed inside this frame: it keeps the title and the
+        // flock clear of the status bar, the launcher's own widgets and the
+        // navigation bar, with side margins so nothing is clipped at the edge.
+        val frame = WallpaperCanvas.frame(width, height, settings.showTitle)
+        val centreX = (frame.left + frame.right) / 2f
+
         val ink = Color.rgb(46, 38, 32)
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = ink
             textAlign = Paint.Align.CENTER
-            textSize = width * 0.055f
+            textSize = frame.unit * 0.055f
             typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
         }
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = ink
             textAlign = Paint.Align.CENTER
-            textSize = width * 0.028f
+            textSize = frame.unit * 0.028f
             typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
         }
 
-        var topMargin = height * 0.04f
         if (settings.showTitle) {
-            canvas.drawText(settings.titleText, width / 2f, height * 0.07f, titlePaint)
-            topMargin = height * 0.11f
+            // A long custom title is shrunk to fit rather than run off the sides.
+            val room = frame.right - frame.left
+            val measured = titlePaint.measureText(settings.titleText)
+            if (measured > room && measured > 0f) {
+                titlePaint.textSize = titlePaint.textSize * room / measured
+            }
+            canvas.drawText(settings.titleText, centreX, frame.titleBaseline, titlePaint)
         }
-        val bottomMargin = height - height * 0.045f
+        val topMargin = frame.top
+        val bottomMargin = frame.bottom
+        val flockWidth = max(1, (frame.right - frame.left).roundToInt())
 
         val birds = species.take(MAX_BIRDS)
         if (birds.isEmpty()) {
@@ -93,7 +108,7 @@ class CollageRenderer(
 
         var downloaded = 0
         val loaded = birds.mapNotNull { s ->
-            val art = loadArt(s, settings.downloadGbPack) ?: return@mapNotNull null
+            val art = loadArt(s, settings, bg) ?: return@mapNotNull null
             if (art.fromPackDownload) downloaded++
             s to art
         }
@@ -104,7 +119,7 @@ class CollageRenderer(
 
         val sizes = CollageLayout.tileSizes(
             counts = loaded.map { it.first.count },
-            width = width,
+            width = flockWidth,
             drawableHeight = bottomMargin - topMargin,
         )
         val tiles = loaded.mapIndexed { i, (_, art) ->
@@ -122,6 +137,8 @@ class CollageRenderer(
             width = width,
             top = topMargin,
             bottom = bottomMargin,
+            left = frame.left,
+            right = frame.right,
         )
 
         // Draw the largest last so the loudest birds sit on top where the
@@ -136,18 +153,25 @@ class CollageRenderer(
         }
         loaded.forEach { (_, art) -> if (!art.bitmap.isRecycled) art.bitmap.recycle() }
 
-        // Footer credit strip
+        // Footer credit strip. Classic plates are CC BY-SA, so say whose they are.
+        val classicCount = loaded.count { it.second.classic }
         val foot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(160, 46, 38, 32)
+            color = Color.argb(150, 46, 38, 32)
             textAlign = Paint.Align.CENTER
-            textSize = width * 0.022f
+            textSize = frame.unit * 0.022f
         }
-        canvas.drawText("Birdy · BirdWeather · local illustrations", width / 2f, height - 36f, foot)
+        val credit = if (classicCount > 0) {
+            "Birdy \u00b7 plates: Fugleramme classic, ${ClassicPlatePack.LICENCE}"
+        } else {
+            "Birdy \u00b7 BirdWeather \u00b7 local illustrations"
+        }
+        canvas.drawText(credit, centreX, frame.footerBaseline, foot)
         return Rendered(
             bitmap = bitmap,
             illustrated = loaded.count { it.second.isIllustration },
             photos = loaded.count { !it.second.isIllustration },
             downloaded = downloaded,
+            classic = classicCount,
         )
     }
 
@@ -166,28 +190,24 @@ class CollageRenderer(
         val isIllustration: Boolean,
         val hasAlpha: Boolean,
         val fromPackDownload: Boolean = false,
+        /** A classic (Fugleramme) plate: toned to the canvas, drawn unshadowed. */
+        val classic: Boolean = false,
     )
 
-    private fun loadArt(s: SpeciesDetection, allowPackDownload: Boolean): Art? {
-        // 1. Birdy's own bundled plate — hand-picked, so it wins.
-        matcher.findLocal(s.name, s.scientific)?.let { assetPath ->
-            decode { context.assets.open(assetPath).use { it.readBytes() } }?.let { bmp ->
-                return illustration(bmp)
-            }
+    /**
+     * Picks the art for one bird. Which illustration source is tried first
+     * follows [BirdySettings.artStyle]; whichever is second still fills the
+     * gaps, so a collage is illustrated as far as any source allows before it
+     * falls back to a photo.
+     */
+    private fun loadArt(s: SpeciesDetection, settings: BirdySettings, bg: Int): Art? {
+        val classicFirst = settings.artStyle == BirdySettings.ART_CLASSIC
+        if (classicFirst) {
+            classicArt(s, settings.downloadClassicPack, bg)?.let { return it }
         }
-        // 2. A GB pack plate already on this device.
-        pack.cached(s.scientific)?.let { file ->
-            decode { file.readBytes() }?.let { bmp ->
-                return illustration(bmp)
-            }
-        }
-        // 3. Fetch one from the GB pack, if the user has that turned on.
-        if (allowPackDownload) {
-            pack.ensure(s.scientific)?.let { file ->
-                decode { file.readBytes() }?.let { bmp ->
-                    return illustration(bmp, fromPackDownload = true)
-                }
-            }
+        birdyArt(s, settings.downloadGbPack)?.let { return it }
+        if (!classicFirst) {
+            classicArt(s, settings.downloadClassicPack, bg)?.let { return it }
         }
         // 4. Last resort: BirdWeather's own photo thumbnail.
         // Same http(s)-only gate as desktop is_safe_download_url().
@@ -206,19 +226,67 @@ class CollageRenderer(
         return null
     }
 
+    /** Birdy's own bundled plate, else one from the GB pack. */
+    private fun birdyArt(s: SpeciesDetection, allowPackDownload: Boolean): Art? {
+        // Birdy's own bundled plate: hand-picked, so it wins.
+        matcher.findLocal(s.name, s.scientific)?.let { assetPath ->
+            decode { context.assets.open(assetPath).use { it.readBytes() } }?.let { bmp ->
+                return illustration(bmp)
+            }
+        }
+        // A GB pack plate already on this device.
+        pack.cached(s.scientific)?.let { file ->
+            decode { file.readBytes() }?.let { bmp ->
+                return illustration(bmp)
+            }
+        }
+        // Fetch one from the GB pack, if the user has that turned on.
+        if (allowPackDownload) {
+            pack.ensure(s.scientific)?.let { file ->
+                decode { file.readBytes() }?.let { bmp ->
+                    return illustration(bmp, fromPackDownload = true)
+                }
+            }
+        }
+        return null
+    }
+
+    /** A classic (Fugleramme) plate: cached, or fetched if that is allowed. */
+    private fun classicArt(s: SpeciesDetection, allowDownload: Boolean, bg: Int): Art? {
+        classic.cached(s.scientific)?.let { file ->
+            decode { file.readBytes() }?.let { bmp ->
+                return illustration(bmp, paperTarget = bg)
+            }
+        }
+        if (allowDownload) {
+            classic.ensure(s.scientific)?.let { file ->
+                decode { file.readBytes() }?.let { bmp ->
+                    return illustration(bmp, fromPackDownload = true, paperTarget = bg)
+                }
+            }
+        }
+        return null
+    }
+
     /**
      * Prepares an illustration for the flock: an opaque plate has its paper
      * keyed out so it becomes a cutout like every other bird, and any cutout
      * is trimmed to its own ink so the packer reserves the bird's space, not
-     * the exporter's margins.
+     * the exporter's margins. A classic plate ([paperTarget] set) also has its
+     * margin of scan paper toned to the canvas colour.
      */
-    private fun illustration(source: Bitmap, fromPackDownload: Boolean = false): Art {
-        val prepared = cutoutOf(source)
+    private fun illustration(
+        source: Bitmap,
+        fromPackDownload: Boolean = false,
+        paperTarget: Int? = null,
+    ): Art {
+        val prepared = cutoutOf(source, paperTarget)
         return Art(
             bitmap = prepared,
             isIllustration = true,
             hasAlpha = prepared.hasAlpha(),
             fromPackDownload = fromPackDownload,
+            classic = paperTarget != null,
         )
     }
 
@@ -228,7 +296,7 @@ class CollageRenderer(
      * bitmap (drawn as a disc plate) when the art has no flat background to
      * key — a full-bleed painting, say.
      */
-    private fun cutoutOf(source: Bitmap): Bitmap {
+    private fun cutoutOf(source: Bitmap, paperTarget: Int? = null): Bitmap {
         val w = source.width
         val h = source.height
         if (w <= 2 || h <= 2 || w.toLong() * h > MAX_KEY_PIXELS) return source
@@ -246,12 +314,13 @@ class CollageRenderer(
         val by = bounds[1]
         val bw = bounds[2]
         val bh = bounds[3]
-        val out = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
-        val row = IntArray(bw)
+        val trimmed = IntArray(bw * bh)
         for (y in 0 until bh) {
-            System.arraycopy(pixels, (by + y) * w + bx, row, 0, bw)
-            out.setPixels(row, 0, bw, 0, y, bw, 1)
+            System.arraycopy(pixels, (by + y) * w + bx, trimmed, y * bw, bw)
         }
+        if (paperTarget != null) PaperTone.level(trimmed, bw, bh, paperTarget)
+        val out = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+        out.setPixels(trimmed, 0, bw, 0, 0, bw, bh)
         if (!source.isRecycled) source.recycle()
         return out
     }
@@ -305,14 +374,17 @@ class CollageRenderer(
             val scaled = Bitmap.createScaledBitmap(src, w, h, true)
             // A soft ellipse under the bird instead of a hard disc: a cutout
             // has no plate behind it, so a full circle would read as a blob.
-            val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(28, 30, 20, 10) }
-            canvas.drawOval(
-                p.cx - w * 0.34f,
-                p.cy + h * 0.30f,
-                p.cx + w * 0.34f,
-                p.cy + h * 0.46f,
-                shadow,
-            )
+            // A classic plate brings its own perch and page, so it gets none.
+            if (!art.classic) {
+                val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(28, 30, 20, 10) }
+                canvas.drawOval(
+                    p.cx - w * 0.34f,
+                    p.cy + h * 0.30f,
+                    p.cx + w * 0.34f,
+                    p.cy + h * 0.46f,
+                    shadow,
+                )
+            }
             canvas.drawBitmap(scaled, p.cx - w / 2f, p.cy - h / 2f, null)
             if (scaled != src) scaled.recycle()
             return

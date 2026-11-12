@@ -58,7 +58,7 @@ from datetime import datetime, timezone
 from collections import Counter
 
 try:
-    from PIL import Image, ImageDraw, ImageFont, ImageChops, ImageFilter, ImageEnhance
+    from PIL import Image, ImageDraw, ImageFont, ImageChops, ImageFilter, ImageEnhance, ImageStat
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -71,6 +71,10 @@ import random
 # of the circular-import risk that importing import_avianassets_illustrations
 # (which itself imports this module) would.
 from rename_latin_illustrations import safe_filename
+
+# Classic 1800s plates from the Fugleramme project (see CLASSIC_PLATES.md).
+# Also standalone: it knows nothing about this module.
+import birdy_classic_pack
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -125,7 +129,20 @@ _DEFAULTS = {
     # Open birdweather_snapshot.html in the default browser after a run.
     # Off by default so scheduled/silent refreshes stay quiet.
     "open_html": "false",
+    # Which artwork to prefer: "birdy" (your Illustrations/ folder first) or
+    # "classic" (hand-coloured 1800s plates from the Fugleramme project
+    # first). Either way the other one fills the gaps before a photo does.
+    "art_style": "birdy",
+    # Download classic plates on demand into ClassicPlates/ next to Birdy.
+    # "false" keeps Birdy to your own Illustrations/ and BirdWeather photos.
+    "classic_plates": "true",
+    # Wallpaper size in pixels. Leave both blank to use the screen's own
+    # resolution (auto-detected on Windows, Linux and macOS).
+    "wallpaper_width": "",
+    "wallpaper_height": "",
 }
+
+ART_STYLES = ("birdy", "classic")
 
 LABEL_STYLES = ("common", "scientific", "station")
 
@@ -240,6 +257,7 @@ def load_runtime_config():
     global _cfg, POSTCODE, FALLBACK_LAT, FALLBACK_LON, RADIUS_KM, DAYS
     global PERIOD_COUNT, PERIOD_UNIT, SHOW_TITLE, TITLE_TEXT, SHOW_LABELS, LABEL_STYLE
     global BG_COLOR, BG_COLOR_HEX, MIN_CONFIDENCE, OPEN_HTML
+    global ART_STYLE, CLASSIC_PLATES, IMAGE_WIDTH, IMAGE_HEIGHT
 
     _cfg = load_user_config()
 
@@ -280,6 +298,31 @@ def load_runtime_config():
 
     OPEN_HTML = _cfg.getboolean("open_html")
 
+    ART_STYLE = (_cfg.get("art_style") or "birdy").strip().lower()
+    if ART_STYLE not in ART_STYLES:
+        ART_STYLE = "birdy"
+    try:
+        CLASSIC_PLATES = _cfg.getboolean("classic_plates")
+    except ValueError:
+        CLASSIC_PLATES = True
+
+    # A hand-set wallpaper size wins over auto-detection; anything that isn't
+    # a sensible pair of numbers is ignored rather than crashing a refresh.
+    IMAGE_WIDTH, IMAGE_HEIGHT = parse_wallpaper_size(
+        _cfg.get("wallpaper_width"), _cfg.get("wallpaper_height"))
+
+
+def parse_wallpaper_size(width_raw, height_raw):
+    """(width, height) from config.ini, or (None, None) to auto-detect."""
+    try:
+        w = int(float(str(width_raw or "").strip()))
+        h = int(float(str(height_raw or "").strip()))
+    except ValueError:
+        return None, None
+    if 320 <= w <= 16384 and 320 <= h <= 16384:
+        return w, h
+    return None, None
+
 
 MAX_SPECIES_CARDS = 40    # Cap on how many species cards to render (HTML view)
 
@@ -293,6 +336,15 @@ SCRIPT_DIR = app_dir()
 # recently modified one is used. Falls back to the BirdWeather thumbnail for any
 # species without a local match. Set to None to disable.
 ILLUSTRATIONS_DIR = os.path.join(SCRIPT_DIR, "Illustrations")
+
+# Classic plates (Fugleramme, CC BY-SA 4.0) are downloaded here on demand and
+# kept apart from Illustrations/, so that folder stays purely your own art.
+CLASSIC_PLATES_DIR = os.path.join(SCRIPT_DIR, "ClassicPlates")
+ART_STYLE = "birdy"
+CLASSIC_PLATES = True
+# species common name -> classic plate path, filled once per run by
+# prepare_classic_plates() so the HTML and wallpaper passes share it.
+_CLASSIC_ART = {}
 
 # Render a JPG and set it as the desktop wallpaper (Windows / Linux / macOS;
 # see birdy_wallpaper.py). Requires: pip install Pillow
@@ -495,7 +547,18 @@ def run_first_time_setup():
     parsed_bg = parse_bg_color(bg_raw, (244, 237, 224))
     bg_color = key if key in _BG_COLOR_PRESETS else rgb_to_hex(parsed_bg)
 
+    classic_first = messagebox.askyesno(
+        "Birdy setup — artwork",
+        "Use classic 1800s bird plates?\n\n"
+        "Yes: hand-coloured natural-history plates (Gould, von Wright, "
+        "Audubon and others) from the Fugleramme project, downloaded as "
+        "birds turn up.\n\n"
+        "No: Birdy's own modern illustrations, with the classic plates only "
+        "filling in for birds it has no picture of.\n\n"
+        "(Change any time with --settings, or art_style in config.ini.)")
+
     values = {
+        "art_style": "classic" if classic_first else "birdy",
         "postcode": postcode,
         "radius_km": radius_km,
         "days": days,
@@ -565,7 +628,8 @@ def run_first_time_setup():
     root.destroy()
 
     global POSTCODE, SHOW_TITLE, SHOW_LABELS, RADIUS_KM, DAYS
-    global PERIOD_COUNT, PERIOD_UNIT, BG_COLOR, BG_COLOR_HEX
+    global PERIOD_COUNT, PERIOD_UNIT, BG_COLOR, BG_COLOR_HEX, ART_STYLE
+    ART_STYLE = "classic" if classic_first else "birdy"
     POSTCODE = postcode or None
     SHOW_TITLE = show_title
     SHOW_LABELS = show_labels
@@ -907,6 +971,60 @@ def find_local_illustration(common_name, index, scientific=None):
     return candidates[0][0]
 
 
+def prepare_classic_plates(species_list, illustration_index, limit=60):
+    """Make sure the classic plates this run will draw are on disk.
+
+    With art_style = classic every bird wants one; with art_style = birdy
+    only the birds your Illustrations/ folder has nothing for do. Plates
+    already in ClassicPlates/ are reused, so a normal refresh downloads
+    nothing. Best-effort: any failure just leaves that bird to fall back."""
+    _CLASSIC_ART.clear()
+    manifest = birdy_classic_pack.load_manifest()
+    if not manifest:
+        return
+    wanted = {}
+    for s in species_list[:limit]:
+        sci = s.get("scientific")
+        if not sci:
+            continue
+        if ART_STYLE != "classic" and find_local_illustration(
+                s["name"], illustration_index, sci):
+            continue
+        wanted[s["name"]] = sci
+    if not wanted:
+        return
+    if CLASSIC_PLATES:
+        paths, downloaded, failed = birdy_classic_pack.ensure_many(
+            manifest, list(wanted.values()), CLASSIC_PLATES_DIR,
+            fetch=fetch_image_bytes)
+        if downloaded or failed:
+            print(f"Classic plates: {downloaded} downloaded"
+                  + (f", {failed} failed" if failed else "") + ".")
+    else:
+        # Downloads are off, but plates fetched earlier are still fair game.
+        paths = {}
+        for sci in wanted.values():
+            slug = manifest.resolve(sci)
+            have = slug and birdy_classic_pack.cached_path(CLASSIC_PLATES_DIR, slug)
+            if have:
+                paths[sci] = have
+    for name, sci in wanted.items():
+        if sci in paths:
+            _CLASSIC_ART[name] = paths[sci]
+
+
+def find_art(species, illustration_index):
+    """The illustration to draw for this bird, honouring art_style.
+
+    Returns a file path, or None to fall back to the BirdWeather photo."""
+    local = find_local_illustration(
+        species["name"], illustration_index, species.get("scientific"))
+    classic = _CLASSIC_ART.get(species["name"])
+    if ART_STYLE == "classic":
+        return classic or local
+    return local or classic
+
+
 _MIME_TYPES = {".png": "image/png", ".jpg": "image/jpeg",
                ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
@@ -938,15 +1056,77 @@ def load_cutout(path):
     The returned image is shared: callers must treat it as read-only and
     build on copies (resize/rotate already return new images)."""
     try:
-        key = (path, os.path.getmtime(path))
+        key = (path, os.path.getmtime(path), CUTOUT_MAX_DIM)
     except OSError:
-        key = (path, None)
+        key = (path, None, CUTOUT_MAX_DIM)
     cached = _CUTOUT_CACHE.get(key)
     if cached is None:
         with Image.open(path) as im:
-            cached = cutout_illustration(im)
+            cached = cutout_illustration(im, max_dim=CUTOUT_MAX_DIM)
+        if is_classic_plate(path):
+            cached = level_plate_paper(
+                cached, globals().get("BG_COLOR", (244, 237, 224)))
         _CUTOUT_CACHE[key] = cached
     return cached
+
+
+def is_classic_plate(path):
+    try:
+        return os.path.commonpath(
+            [os.path.abspath(path), os.path.abspath(CLASSIC_PLATES_DIR)]
+        ) == os.path.abspath(CLASSIC_PLATES_DIR)
+    except ValueError:
+        return False
+
+
+def level_plate_paper(cutout, target_rgb):
+    """Blend a classic plate's scrap of scan paper into Birdy's canvas.
+
+    The classic plates are cut out with a margin of the original page left
+    round the bird, and every scan's paper is a slightly different tone:
+    drawn as-is, each bird sits on a pale sticker. Following the approach
+    Fugleramme's own renderer takes (render/paper.py, MIT), the paper tone
+    is sampled from the opaque ring just inside the cut, every paper-like
+    pixel is shifted by the difference between that tone and the canvas
+    colour, and the cut edge is feathered so the patch melts into the page.
+    The shift is small and only touches pale, unsaturated pixels close to
+    the sampled tone, so plumage is left alone."""
+    rgba = cutout.convert("RGBA")
+    r, g, b, alpha = rgba.split()
+    reach = max(2, round(max(rgba.size) / 140))
+    opaque = alpha.point(lambda v: 255 if v > 24 else 0)
+    # Opaque pixels within `reach` of the cut: where the paper tone is read.
+    near_cut = ImageChops.invert(opaque).filter(ImageFilter.MaxFilter(2 * reach + 1))
+    ring = ImageChops.multiply(opaque, near_cut)
+    if ring.histogram()[255] < 50:
+        return rgba
+    rgb = Image.merge("RGB", (r, g, b))
+    paper = tuple(int(v) for v in ImageStat.Stat(rgb, mask=ring).median)
+
+    # paper-like: close to the sampled tone, unsaturated, and light.
+    diff = ImageChops.difference(rgb, Image.new("RGB", rgb.size, paper))
+    dist = ImageChops.lighter(ImageChops.lighter(*diff.split()[:2]), diff.split()[2])
+    hi = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    lo = ImageChops.darker(ImageChops.darker(r, g), b)
+    sat = ImageChops.subtract(hi, lo)
+    paper_px = ImageChops.multiply(
+        ImageChops.multiply(dist.point(lambda v: 255 if v < 50 else 0),
+                            sat.point(lambda v: 255 if v < 55 else 0)),
+        ImageChops.multiply(hi.point(lambda v: 255 if v > 160 else 0), opaque))
+
+    delta = [t - p for t, p in zip(target_rgb, paper)]
+    shifted = Image.merge("RGB", [
+        ch.point(lambda v, d=d: max(0, min(255, v + d)))
+        for ch, d in zip((r, g, b), delta)])
+    # Soften the mask a touch so the shift has no hard boundary inside the plate.
+    rgb = Image.composite(shifted, rgb, paper_px.filter(ImageFilter.GaussianBlur(1)))
+
+    # Feather the cut inwards only: never make a pixel more opaque than it was.
+    feathered = ImageChops.darker(
+        alpha, opaque.filter(ImageFilter.GaussianBlur(max(1.5, reach * 0.9))))
+    out = rgb.convert("RGBA")
+    out.putalpha(feathered)
+    return out
 
 
 # The page shows each bird in a 128px circle; 256 keeps it crisp on HiDPI
@@ -1216,7 +1396,7 @@ def render_html(place, lat, lon, period_label, radius_km, species_list,
     local_matches = 0
     cards = []
     for s in species_list[:MAX_SPECIES_CARDS]:
-        local_path = find_local_illustration(s["name"], illustration_index, s.get("scientific"))
+        local_path = find_art(s, illustration_index)
         alt = esc(s["name"])
         thumb = safe_url(s["thumb"])
         if local_path:
@@ -1278,8 +1458,8 @@ def render_html(place, lat, lon, period_label, radius_km, species_list,
     return html
 
 
-def get_screen_size():
-    """Physical desktop resolution in pixels.
+def _windows_screen_size():
+    """Primary monitor resolution in physical pixels.
 
     Process DPI awareness is set first: without it Windows reports the
     DPI-scaled resolution to an unaware process (2560x1440 at 150% scaling
@@ -1288,22 +1468,111 @@ def get_screen_size():
     display, which is most laptops. SetProcessDpiAwareness is only
     available from 8.1 on, so fall back to the older user32 call, and to
     the unaware measurement if neither is present."""
+    import ctypes
+    try:
+        # 2 = PROCESS_PER_MONITOR_DPI_AWARE
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    user32 = ctypes.windll.user32
+    return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def parse_xrandr(output):
+    """Resolution of the primary (else first) connected output, or None."""
+    first = None
+    for line in output.splitlines():
+        if " connected" not in line:
+            continue
+        m = re.search(r"(\d{3,5})x(\d{3,5})\+\d+\+\d+", line)
+        if not m:
+            continue
+        size = int(m.group(1)), int(m.group(2))
+        if " primary " in line:
+            return size
+        first = first or size
+    return first
+
+
+def parse_system_profiler(output):
+    """Resolution of the main (else first) display from macOS
+    `system_profiler SPDisplaysDataType`, in native panel pixels."""
+    sizes = []
+    main = None
+    for line in output.splitlines():
+        m = re.search(r"Resolution:\s*(\d{3,5})\s*x\s*(\d{3,5})", line)
+        if m:
+            sizes.append((int(m.group(1)), int(m.group(2))))
+        elif "Main Display: Yes" in line and sizes:
+            main = sizes[-1]
+    return main or (sizes[0] if sizes else None)
+
+
+def _command_output(args, timeout=8):
+    return subprocess.run(args, capture_output=True, text=True,
+                          timeout=timeout, check=True).stdout
+
+
+def _tk_screen_size():
+    import tkinter as tk
+    root = tk.Tk()
+    try:
+        root.withdraw()
+        return root.winfo_screenwidth(), root.winfo_screenheight()
+    finally:
+        root.destroy()
+
+
+_SCREEN_SIZE = None
+
+
+def get_screen_size():
+    """Size to render the wallpaper at, in pixels.
+
+    wallpaper_width / wallpaper_height in config.ini win when set. Otherwise
+    the primary screen is measured: WinAPI on Windows, xrandr on Linux,
+    system_profiler on macOS, Tk as a last resort. Linux and macOS used to
+    get a hard-coded 1920x1080 here, which the desktop then stretched or
+    cropped to fit — soft on HiDPI panels, off-centre on anything that
+    wasn't 16:9. Measured once per run."""
+    global _SCREEN_SIZE
     if IMAGE_WIDTH and IMAGE_HEIGHT:
         return IMAGE_WIDTH, IMAGE_HEIGHT
-    try:
-        import ctypes
+    if _SCREEN_SIZE:
+        return _SCREEN_SIZE
+    probes = []
+    if sys.platform.startswith("win"):
+        probes.append(_windows_screen_size)
+    elif sys.platform == "darwin":
+        probes.append(lambda: parse_system_profiler(
+            _command_output(["system_profiler", "SPDisplaysDataType"], timeout=20)))
+    else:
+        probes.append(lambda: parse_xrandr(_command_output(["xrandr", "--current"])))
+    probes.append(_tk_screen_size)
+    for probe in probes:
         try:
-            # 2 = PROCESS_PER_MONITOR_DPI_AWARE
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            size = probe()
         except Exception:
-            try:
-                ctypes.windll.user32.SetProcessDPIAware()
-            except Exception:
-                pass
-        user32 = ctypes.windll.user32
-        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-    except Exception:
-        return 1920, 1080
+            continue
+        if size and size[0] >= 320 and size[1] >= 320:
+            _SCREEN_SIZE = (int(size[0]), int(size[1]))
+            return _SCREEN_SIZE
+    return 1920, 1080
+
+
+def cutout_dim_for(width, height):
+    """How large to keep each bird's cutout, for a wallpaper this size.
+
+    420 px was sized for a 1080p screen; on a 1440p or 4K monitor the
+    largest birds are drawn bigger than that, so they were being upscaled
+    from a 420 px cutout and came out soft."""
+    return max(420, min(900, int(min(width, height) * 0.42)))
+
+
+CUTOUT_MAX_DIM = 420
 
 
 def load_font(names, size):
@@ -1718,8 +1987,22 @@ def tiles_collide(a, b, samples=13):
                       a["_gw"] / a["w"], a["_gh"] / a["h"], b, samples)
 
 
+def flock_bias(avail_w, avail_h):
+    """(x, y) stretch of the packing spiral for a canvas this shape.
+
+    A landscape desktop keeps the long-standing 1.7 sideways stretch (wider
+    still on an ultrawide); a portrait monitor stretches the spiral
+    downwards instead, so the flock fills the screen rather than overflowing
+    its sides and being shrunk to fit."""
+    aspect = avail_w / max(1.0, avail_h)
+    if aspect >= 1:
+        return max(1.7, min(2.8, aspect * 0.85)), 1.0
+    return 1.0, min(2.2, 1 / aspect)
+
+
 def pack_flock(tiles, center_x, center_y, canvas_w, canvas_h, top_margin,
-                aspect_bias=1.7, max_iterations=10, shrink_factor=0.93):
+                aspect_bias=1.7, max_iterations=10, shrink_factor=0.93,
+                aspect_bias_y=1.0, margin_x=0, bottom_margin=0):
     """Center-out spiral packing with real silhouette collision (not just
     bounding boxes), horizontally-biased spiral, and shrink+repack if
     anything ends up off-canvas — mirroring the AvianVisitors approach."""
@@ -1758,7 +2041,7 @@ def pack_flock(tiles, center_x, center_y, canvas_w, canvas_h, top_margin,
                 theta += 0.13
                 r = 2.6 * theta
                 cx = center_x + r * math.cos(theta) * aspect_bias
-                cy = center_y + r * math.sin(theta)
+                cy = center_y + r * math.sin(theta) * aspect_bias_y
                 x, y = cx - w / 2, cy - h / 2
                 ax1, ay1 = x + w, y + h
                 # Most placed tiles are nowhere near the candidate, so the
@@ -1794,9 +2077,9 @@ def pack_flock(tiles, center_x, center_y, canvas_w, canvas_h, top_margin,
             boxes.append((found["x"], found["y"],
                           found["x"] + found["w"], found["y"] + found["h"]))
 
-            if (found["x"] < 0 or found["y"] < top_margin or
-                    found["x"] + found["w"] > canvas_w or
-                    found["y"] + found["h"] > canvas_h):
+            if (found["x"] < margin_x or found["y"] < top_margin or
+                    found["x"] + found["w"] > canvas_w - margin_x or
+                    found["y"] + found["h"] > canvas_h - bottom_margin):
                 overflowed = True
 
         if not overflowed:
@@ -1831,16 +2114,22 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     # preview is set in ('Iowan Old Style', 'Palatino Linotype', Georgia) —
     # falling back to Georgia, then Times New Roman (always present on
     # Windows), before Pillow's plain bitmap default.
-    title_font = load_font(["georgiab", "timesbd"], 54)
-    name_font = load_font(["palab", "georgiab", "timesbd"], 19)
-    name_font_italic = load_font(["palai", "georgiai", "timesi"], 19)
+    #
+    # Every fixed pixel size below was tuned on a 1080p screen, so scale it
+    # by the screen's short side: on a 4K monitor the title and labels were
+    # half the intended size, and the title's clear band half as deep.
+    ui = max(0.6, min(width, height) / 1080)
+    title_font = load_font(["georgiab", "timesbd"], round(54 * ui))
+    name_font = load_font(["palab", "georgiab", "timesbd"], round(19 * ui))
+    name_font_italic = load_font(["palai", "georgiai", "timesi"], round(19 * ui))
     # Scientific names read as italic (matching the HTML card's .sci style);
     # common/station labels stay in the semibold weight.
     label_font = name_font_italic if LABEL_STYLE == "scientific" else name_font
 
     if SHOW_TITLE:
         tw = draw.textlength(TITLE_TEXT, font=title_font)
-        draw.text(((width - tw) / 2, 60), TITLE_TEXT, font=title_font, fill=INK)
+        draw.text(((width - tw) / 2, round(60 * ui)), TITLE_TEXT,
+                  font=title_font, fill=INK)
 
     birds = species_list[:60]
     n = len(birds)
@@ -1854,14 +2143,17 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
     # sequentially, a handful of slow/unresponsive hosts could eat the
     # entire 15-minute interval this is normally scheduled to rerun on.
     local_cutouts = {}
+    classic_names = set()
     needs_thumb = []
     for s in birds:
-        local_path = find_local_illustration(s["name"], illustration_index, s.get("scientific"))
+        local_path = find_art(s, illustration_index)
         if local_path:
             try:
                 # Shared with the HTML pass, which has usually already
                 # decoded this same file a moment ago (see load_cutout).
                 local_cutouts[s["name"]] = load_cutout(local_path)
+                if is_classic_plate(local_path):
+                    classic_names.add(s["name"])
                 continue
             except Exception as e:
                 print(f"Cutout failed for {s['name']} ({e}), using thumbnail instead.")
@@ -1902,6 +2194,7 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
         tiles.append({
             "species": s, "cutout": cutout, "grid": grid,
             "aspect": aspect, "count": count,
+            "classic": s["name"] in classic_names,
         })
 
     if not tiles:
@@ -1925,19 +2218,28 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
         area = (scores[id(t)] / total_score) * budget_area
         h = math.sqrt(area / t["aspect"])
         w = t["aspect"] * h
-        min_dim = 70
+        min_dim = 70 * ui
         if h < min_dim:
             h, w = min_dim, min_dim * t["aspect"]
         t["w"], t["h"] = w, h
 
     # --- pack ---
     center_x = width / 2
-    top_margin = 170 if SHOW_TITLE else 60  # keep clear of the title, if shown
+    top_margin = round((170 if SHOW_TITLE else 60) * ui)  # clear of the title
+    # Keep the flock off the very edges: the taskbar / dock covers the bottom
+    # strip, and a wallpaper scaled to "fill" a second monitor of another
+    # shape crops a little off the sides.
+    margin_x = round(width * 0.02)
+    bottom_margin = round(height * 0.05)
     # Vertical center of the flock is derived from top_margin (rather than a
     # flat fraction of height) so hiding the title reclaims that space
     # instead of leaving it as a dead gap above a collage that stayed put.
-    center_y = top_margin + (height - top_margin) * 0.50
-    placed = pack_flock(tiles, center_x, center_y, width, height, top_margin)
+    center_y = top_margin + (height - bottom_margin - top_margin) * 0.50
+    bias_x, bias_y = flock_bias(width - 2 * margin_x,
+                                height - bottom_margin - top_margin)
+    placed = pack_flock(tiles, center_x, center_y, width, height, top_margin,
+                        aspect_bias=bias_x, aspect_bias_y=bias_y,
+                        margin_x=margin_x, bottom_margin=bottom_margin)
 
     # draw back-to-front: place larger/central tiles last so they sit on top
     placed_by_area = sorted(placed, key=lambda t: t["w"] * t["h"])
@@ -1947,7 +2249,11 @@ def render_wallpaper_image(species_list, counts, illustration_index, output_path
             (max(1, round(t["w"])), max(1, round(t["h"]))), Image.LANCZOS
         )
         x, y = round(t["x"]), round(t["y"])
-        add_drop_shadow(canvas, cutout, x, y)
+        # A classic plate keeps a margin of its own page round the bird, toned
+        # to match the canvas; a shadow cast by that margin would outline it
+        # and turn every bird into a sticker.
+        if not t.get("classic"):
+            add_drop_shadow(canvas, cutout, x, y)
         canvas.paste(cutout, (x, y), mask=cutout)
         t["draw_x"], t["draw_y"] = x, y
 
@@ -2007,6 +2313,8 @@ def set_desktop_wallpaper(image_path):
 
 
 def main():
+    global CUTOUT_MAX_DIM
+    CUTOUT_MAX_DIM = cutout_dim_for(*get_screen_size())
     place = "Spofforth"
     lat, lon = FALLBACK_LAT, FALLBACK_LON
 
@@ -2049,6 +2357,10 @@ def main():
     # the HTML pass and the wallpaper pass were each building their own
     # copy of the identical index on every run.
     illustration_index = build_illustration_index(ILLUSTRATIONS_DIR)
+    try:
+        prepare_classic_plates(species_list, illustration_index)
+    except Exception as e:
+        print(f"Classic plates unavailable this run ({e}).")
 
     html = render_html(
         place=place,

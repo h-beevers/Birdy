@@ -143,6 +143,54 @@ def open_settings_gui(parent=None):
         frame, text="Open HTML after run", variable=open_html_var
     ).grid(row=12, column=0, columnspan=2, sticky="w", pady=2)
 
+    # Artwork: friendly labels in the box, config values on disk.
+    art_labels = {
+        "birdy": "My illustrations first",
+        "classic": "Classic 1800s plates first",
+    }
+    ttk.Label(frame, text="Artwork").grid(row=13, column=0, sticky="w", pady=2)
+    art_var = tk.StringVar(
+        value=art_labels.get(
+            (cfg.get("art_style") or "birdy").strip().lower(), art_labels["birdy"]
+        )
+    )
+    ttk.Combobox(
+        frame,
+        textvariable=art_var,
+        values=list(art_labels.values()),
+        state="readonly",
+        width=25,
+    ).grid(row=13, column=1, sticky="ew", pady=2)
+    classic_var = tk.BooleanVar(
+        value=str(cfg.get("classic_plates", "true")).lower()
+        in ("1", "true", "yes", "on")
+    )
+    ttk.Checkbutton(
+        frame,
+        text="Download classic plates as birds turn up (Fugleramme, CC BY-SA 4.0)",
+        variable=classic_var,
+    ).grid(row=14, column=0, columnspan=2, sticky="w", pady=2)
+
+    ttk.Label(frame, text="Wallpaper size (px)").grid(
+        row=15, column=0, sticky="w", pady=2
+    )
+    size_frame = ttk.Frame(frame)
+    size_frame.grid(row=15, column=1, sticky="w", pady=2)
+    width_var = tk.StringVar(value=(cfg.get("wallpaper_width") or "").strip())
+    height_var = tk.StringVar(value=(cfg.get("wallpaper_height") or "").strip())
+    ttk.Entry(size_frame, textvariable=width_var, width=8).grid(row=0, column=0)
+    ttk.Label(size_frame, text=" x ").grid(row=0, column=1)
+    ttk.Entry(size_frame, textvariable=height_var, width=8).grid(row=0, column=2)
+    try:
+        detected = "{} x {}".format(*app.get_screen_size())
+    except Exception:
+        detected = "unknown"
+    ttk.Label(
+        frame,
+        text=f"Leave both blank to match your screen (currently {detected}).",
+        wraplength=360,
+    ).grid(row=16, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
     def _normalize_bg_color(raw: str) -> str:
         """Store a preset name when possible, else validated #rrggbb."""
         bg_raw = (raw or "").strip() or app._DEFAULTS["bg_color"]
@@ -202,7 +250,21 @@ def open_settings_gui(parent=None):
             ) from e
         if not 0.0 <= mc <= 1.0:
             raise ValueError("min_confidence must be between 0 and 1.")
+        art_style = next(
+            (k for k, label in art_labels.items() if label == art_var.get()), "birdy"
+        )
+        wp_w, wp_h = width_var.get().strip(), height_var.get().strip()
+        if wp_w or wp_h:
+            if app.parse_wallpaper_size(wp_w, wp_h) == (None, None):
+                raise ValueError(
+                    "Wallpaper size needs both a width and a height in pixels "
+                    "(e.g. 2560 x 1440), or leave both blank."
+                )
         return {
+            "art_style": art_style,
+            "classic_plates": _bool_str(classic_var.get()),
+            "wallpaper_width": wp_w,
+            "wallpaper_height": wp_h,
             "postcode": postcode_var.get().strip(),
             "radius_km": radius,
             "days": days,
@@ -328,7 +390,7 @@ def open_settings_gui(parent=None):
         messagebox.showinfo("Birdy settings", msg, parent=root)
 
     btns = ttk.Frame(frame)
-    btns.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+    btns.grid(row=17, column=0, columnspan=2, sticky="ew", pady=(10, 0))
     ttk.Button(btns, text="Save", command=lambda: on_save(False)).grid(
         row=0, column=0, padx=2
     )

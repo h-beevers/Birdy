@@ -17,6 +17,8 @@ on:
       - "birdweather_local.py"
       - "birdy_wallpaper.py"
       - "birdy_settings_gui.py"
+      - "birdy_classic_pack.py"
+      - "android/app/src/main/assets/classic_pack_manifest.txt"
       - "rename_latin_illustrations.py"
       - "birdy.spec"
       - "requirements.txt"

@@ -129,6 +129,10 @@ object CollageLayout {
      *
      * The spiral is biased along the canvas's long axis, so a portrait phone
      * fills top-to-bottom instead of piling everything across the middle.
+     *
+     * [left] and [right] bound the flock sideways the way [top] and [bottom]
+     * do vertically; they default to the full canvas width. The flock is
+     * centred in that box, so equal side margins keep it centred on screen.
      */
     fun packFlock(
         tiles: List<Tile>,
@@ -137,11 +141,13 @@ object CollageLayout {
         bottom: Float,
         maxIterations: Int = 12,
         shrinkFactor: Float = 0.93f,
+        left: Float = 0f,
+        right: Float = width.toFloat(),
     ): List<Placement> {
         if (tiles.isEmpty()) return emptyList()
-        val centerX = width / 2f
+        val centerX = (left + right) / 2f
         val centerY = (top + bottom) / 2f
-        val spanX = max(1f, width.toFloat())
+        val spanX = max(1f, right - left)
         val spanY = max(1f, bottom - top)
         val biasX = if (spanX >= spanY) (spanX / spanY).coerceAtMost(2.2f) else 1f
         val biasY = if (spanY > spanX) (spanY / spanX).coerceAtMost(2.2f) else 1f
@@ -192,8 +198,8 @@ object CollageLayout {
                     }
                     if (!found) overflowed = true
                 }
-                if (spot.x < 0f || spot.y < top ||
-                    spot.x + spot.w > width || spot.y + spot.h > bottom
+                if (spot.x < left || spot.y < top ||
+                    spot.x + spot.w > right || spot.y + spot.h > bottom
                 ) {
                     overflowed = true
                 }
@@ -207,7 +213,7 @@ object CollageLayout {
         // Best effort: nudge whatever still hangs off the edge back inside.
         return best.map {
             it.copy(
-                cx = clampAxis(it.cx, it.w, 0f, width.toFloat()),
+                cx = clampAxis(it.cx, it.w, left, right),
                 cy = clampAxis(it.cy, it.h, top, bottom),
             )
         }
@@ -347,9 +353,11 @@ object CollageLayout {
         top: Float,
         bottom: Float,
         tolerance: Float = 0.5f,
+        left: Float = 0f,
+        right: Float = width.toFloat(),
     ): Boolean = placements.all {
-        val fitsX = it.w > width ||
-            (it.cx - it.w / 2f >= -tolerance && it.cx + it.w / 2f <= width + tolerance)
+        val fitsX = it.w > right - left ||
+            (it.cx - it.w / 2f >= left - tolerance && it.cx + it.w / 2f <= right + tolerance)
         val fitsY = it.h > (bottom - top) ||
             (it.cy - it.h / 2f >= top - tolerance && it.cy + it.h / 2f <= bottom + tolerance)
         fitsX && fitsY

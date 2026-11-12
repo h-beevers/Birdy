@@ -9,12 +9,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.Constraints
 import androidx.work.NetworkType
-import com.henrybeevers.birdy.collage.CollageRenderer
-import com.henrybeevers.birdy.data.DetectionFetcher
 import com.henrybeevers.birdy.data.PreferencesRepository
-import com.henrybeevers.birdy.wallpaper.WallpaperApplier
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -30,25 +25,15 @@ class RefreshWorker(
     override suspend fun doWork(): Result {
         val prefs = PreferencesRepository(applicationContext)
         return try {
-            val settings = prefs.current()
-            val nearby = DetectionFetcher().fetch(settings)
-            val collage = CollageRenderer(applicationContext)
-            val rendered = collage.renderDetailed(nearby.species, settings)
-            val bmp = rendered.bitmap
-            // Persist last collage for preview
-            val out = File(applicationContext.filesDir, "last_collage.jpg")
-            FileOutputStream(out).use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
-            val wall = WallpaperApplier(applicationContext).apply(bmp, settings.setHome, settings.setLock)
-            prefs.setStatus(
-                "${nearby.sourceStatus} · OK ${nearby.species.size} species near ${nearby.placeName} · " +
-                    "${rendered.illustrated} illustrated / ${rendered.photos} photo · ${wall.message}",
-            )
-            Log.i(TAG, wall.message)
+            val message = Refresher.run(applicationContext, prefs, prefs.current())
+            Log.i(TAG, message)
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "Refresh failed", e)
-            prefs.setStatus("Failed", e.message)
-            Result.retry()
+            prefs.setStatus("Last refresh failed", e.message ?: e.javaClass.simpleName)
+            // Back off and try again, but don't retry forever: the next
+            // scheduled run will come round anyway.
+            if (runAttemptCount < 3) Result.retry() else Result.failure()
         }
     }
 

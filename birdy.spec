@@ -28,8 +28,10 @@ a = Analysis(
     datas=[
         ("Illustrations", "Illustrations"),
         ("packaging", "packaging"),
+        # Species index for the classic plate pack (names only, no artwork).
+        ("android/app/src/main/assets/classic_pack_manifest.txt", "packs"),
     ],
-    hiddenimports=["birdy_wallpaper", "birdy_settings_gui"],
+    hiddenimports=["birdy_wallpaper", "birdy_settings_gui", "birdy_classic_pack"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
