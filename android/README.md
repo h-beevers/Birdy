@@ -54,9 +54,37 @@ python3 android/tools/sync_gb_pack_manifest.py          # rebuild
 python3 android/tools/sync_gb_pack_manifest.py --check  # report drift only
 ```
 
-Order of preference when drawing a bird: bundled Birdy plate → cached GB plate
-→ freshly downloaded GB plate → BirdWeather photo. The status line reports the
-split, e.g. `26 illustrated / 2 photo`.
+**Classic plates** (~800 species of 1800s plates from
+[arnegiacomo/fugleramme](https://github.com/arnegiacomo/fugleramme),
+CC BY-SA 4.0) work the same way through `ClassicPlatePack`, cached in
+`filesDir/classic_plates`. Their index
+(`app/src/main/assets/classic_pack_manifest.txt`) also pins the source commit
+and maps older scientific names onto current ones; rebuild it with
+`python3 android/tools/sync_classic_pack_manifest.py`. `PaperTone` tones each
+plate's margin of scan paper to the canvas colour. See `../CLASSIC_PLATES.md`.
+
+Order of preference when drawing a bird follows **Settings → Artwork**:
+
+- *Birdy illustrations* (default): bundled Birdy plate → GB plate → classic
+  plate → BirdWeather photo.
+- *Classic plates*: classic plate → bundled Birdy plate → GB plate → photo.
+
+The status line reports the split, e.g. `26 illustrated (4 classic), 2 photo`.
+
+## Wallpaper size and framing
+
+`WallpaperApplier.targetSize()` reads the display's physical resolution and
+the collage is drawn at exactly that size (`WallpaperCanvas.targetSize`:
+always portrait on a phone, capped at 3200 px). It is set with a crop hint
+covering the whole bitmap, so Android has nothing to crop or pan. The old
+fixed 1080x1920 canvas was scaled up and cropped on 20:9 phones, which pushed
+the flock off-centre and birds off screen.
+
+`WallpaperCanvas.frame` is the safe area everything is placed in: a top band
+for the status bar and the launcher's date line, the title just beneath it, a
+bottom band for the navigation bar, and side margins that absorb a launcher's
+wallpaper zoom. `CollageLayout.packFlock` takes that box as
+`left`/`right`/`top`/`bottom`.
 
 ## Collage
 

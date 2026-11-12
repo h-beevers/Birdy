@@ -51,4 +51,20 @@ data class BirdySettings(
      * pack is downloaded on this device, never bundled in the APK.
      */
     val downloadGbPack: Boolean = true,
-)
+    /**
+     * Which artwork is tried first: [ART_BIRDY] (Birdy's own bundled plates,
+     * then the GB pack) or [ART_CLASSIC] (1800s plates from Fugleramme).
+     * Whichever comes second still fills the gaps before a photo is used.
+     */
+    val artStyle: String = ART_BIRDY,
+    /** Fetch classic plates (Fugleramme, CC BY-SA 4.0) as species turn up. */
+    val downloadClassicPack: Boolean = true,
+) {
+    companion object {
+        const val ART_BIRDY = "birdy"
+        const val ART_CLASSIC = "classic"
+
+        fun normaliseArtStyle(raw: String?): String =
+            if (raw?.trim()?.lowercase() == ART_CLASSIC) ART_CLASSIC else ART_BIRDY
+    }
+}

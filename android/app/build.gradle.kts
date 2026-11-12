@@ -20,8 +20,8 @@ android {
         applicationId = "com.henrybeevers.birdy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.1.0-sideload"
+        versionCode = 5
+        versionName = "1.2.0-sideload"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

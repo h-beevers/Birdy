@@ -15,8 +15,32 @@ import subprocess
 import sys
 
 
+def _set_windows_fill_style() -> None:
+    """Make Windows scale the wallpaper to fill the screen, centred.
+
+    SPI_SETDESKWALLPAPER only changes the picture; how it is fitted is a
+    separate setting that stays at whatever was chosen last. Left on Tile,
+    Centre or Stretch, a collage rendered for the primary monitor shows up
+    repeated, cropped off-centre or squashed. "Fill" (WallpaperStyle 10) is
+    the one that keeps it centred and undistorted on every monitor."""
+    import winreg
+
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop", 0, winreg.KEY_SET_VALUE
+    ) as key:
+        winreg.SetValueEx(key, "WallpaperStyle", 0, winreg.REG_SZ, "10")
+        winreg.SetValueEx(key, "TileWallpaper", 0, winreg.REG_SZ, "0")
+
+
 def set_windows_wallpaper(image_path: str) -> None:
     import ctypes
+
+    try:
+        _set_windows_fill_style()
+    except Exception:
+        # Locked-down registry: the picture still changes, just with the
+        # user's existing fit setting.
+        pass
 
     SPI_SETDESKWALLPAPER = 20
     SPIF_UPDATEINIFILE = 0x01

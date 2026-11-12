@@ -2,6 +2,8 @@
 birdweather_snapshot.html
 birdweather_snapshot.html.tmp
 birdweather_wallpaper.jpg
+# Classic plates downloaded on demand (see CLASSIC_PLATES.md)
+ClassicPlates/
 birdweather_local.log
 species_for_illustrations.txt
 config.ini

@@ -223,6 +223,24 @@ no Python), sets **home** and **lock** wallpapers via `WallpaperManager`, and
 refreshes with **WorkManager**. Status text shows “Using BirdNET-Pi” vs
 “Using BirdWeather (fallback)”.
 
+### Install on your phone (no computer needed)
+
+1. On the phone, open the [latest release](../../releases/latest) and tap
+   **`Birdy.apk`** (or `Birdy-debug.apk` if that is the only one listed).
+2. Open the downloaded file. Android asks once to let your browser "install
+   unknown apps": allow it, then tap **Install**.
+3. Open Birdy, enter your postcode, pick an artwork style and tap
+   **Build my wallpaper**. The first run downloads artwork and can take a
+   minute.
+
+To update, install the newer APK over the top; settings are kept. (Switching
+between `Birdy.apk` and `Birdy-debug.apk` installs a second copy, because they
+are signed differently: uninstall the old one.)
+
+The wallpaper is drawn at your screen's own resolution, so it is centred with
+every bird on screen whatever the phone's shape. The preview at the top of the
+app shows the whole wallpaper as it was set.
+
 ### Get an APK
 
 Grab the APK from the [Releases page](../../releases) (assets named
@@ -267,8 +285,15 @@ birds* / *Get all*, or left to top itself up as new birds turn up. That pack is
 not bundled in the release: it is not covered by this repo's GPL-3.0 and ships
 no licence of its own, so Birdy fetches it from the source rather than
 redistributing it. Cached plates are ~40 KB each (~12 MB for the whole pack) and
-**Clear** removes them. Anything neither source covers still falls back to a
-BirdWeather photo.
+**Clear** removes them.
+
+Settings → *Artwork* also offers **Classic plates**: hand-coloured 1800s
+natural-history plates for about 800 species from
+[Fugleramme](https://github.com/arnegiacomo/fugleramme) (CC BY-SA 4.0),
+likewise downloaded on your device. Pick them as the main style, or leave
+Birdy's illustrations first and let the classic plates fill the gaps. See
+[CLASSIC_PLATES.md](CLASSIC_PLATES.md). Anything no source covers still falls
+back to a BirdWeather photo.
 
 ### OEM lock-screen note
 
@@ -283,6 +308,36 @@ BirdWeather + postcodes.io, and raw.githubusercontent.com (only when fetching
 GB illustration-pack plates) disclosed; no ads; uninstall deletes local data.
 Not listed on Play yet. Never commit keystores or `key.properties`.
 
+
+## Classic plates (desktop)
+
+Birdy can also draw birds as hand-coloured 1800s plates (Gould, von Wright,
+Audubon and others) from the
+[Fugleramme](https://github.com/arnegiacomo/fugleramme) project, about 800
+species, CC BY-SA 4.0. They are downloaded on demand into a `ClassicPlates/`
+folder next to Birdy, never bundled.
+
+- **As the main style:** set `art_style = classic` in `config.ini`, answer
+  *Yes* to the artwork question in first-run setup, or choose *Classic 1800s
+  plates first* in `Birdy.exe --settings`.
+- **As a gap filler (default):** with `art_style = birdy`, your own
+  `Illustrations/` win and a classic plate is used only for a bird you have no
+  picture of, before falling back to a photo.
+- **Off:** `classic_plates = false` stops the downloads.
+
+Details and credits: [CLASSIC_PLATES.md](CLASSIC_PLATES.md).
+
+## Wallpaper size and fit (desktop)
+
+Birdy renders at your primary screen's real resolution (Windows, Linux via
+`xrandr`, macOS via `system_profiler`), scales the title, labels and bird
+detail to it, and keeps the flock centred with a margin clear of the taskbar.
+On Windows it also sets the wallpaper fit to **Fill**, so a previous Tile /
+Centre / Stretch setting can't repeat, crop or squash the collage.
+
+If detection gets it wrong (or you want a different size, e.g. for a second
+monitor), set `wallpaper_width` and `wallpaper_height` in `config.ini` or in
+`--settings`; leave both blank for automatic.
 
 ## Your own illustrations (optional, but the whole point)
 
@@ -576,6 +631,11 @@ resolution involved.
   [jonnywright/AvianAssets](https://github.com/jonnywright/AvianAssets),
   importable via `import_avianassets_illustrations.py` — see that repo for
   its own license/attribution terms, separate from this one.
+- Classic plates: [arnegiacomo/fugleramme](https://github.com/arnegiacomo/fugleramme)
+  by Arne Giacomo Munthe-Kaas — 1800s plates restored and cut out for that
+  project, CC BY-SA 4.0, downloaded on demand rather than bundled. Legacy
+  name aliases derive from [OpenFauna](https://github.com/tphakala/openfauna)
+  (CC BY-SA 4.0). See [CLASSIC_PLATES.md](CLASSIC_PLATES.md).
 - Postcode lookup: [postcodes.io](https://postcodes.io)
 
 ## Feedback

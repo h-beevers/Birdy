@@ -32,6 +32,8 @@ class PreferencesRepository(private val context: Context) {
         val FIRST_RUN = booleanPreferencesKey("first_run_done")
         val BIRDNET = stringPreferencesKey("birdnet_url")
         val GB_PACK = booleanPreferencesKey("download_gb_pack")
+        val ART_STYLE = stringPreferencesKey("art_style")
+        val CLASSIC_PACK = booleanPreferencesKey("download_classic_pack")
         val LAST_STATUS = stringPreferencesKey("last_status")
         val LAST_ERROR = stringPreferencesKey("last_error")
     }
@@ -53,6 +55,8 @@ class PreferencesRepository(private val context: Context) {
             firstRunDone = p[Keys.FIRST_RUN] ?: false,
             birdnetUrl = p[Keys.BIRDNET] ?: "",
             downloadGbPack = p[Keys.GB_PACK] ?: true,
+            artStyle = BirdySettings.normaliseArtStyle(p[Keys.ART_STYLE]),
+            downloadClassicPack = p[Keys.CLASSIC_PACK] ?: true,
         )
     }
 
@@ -75,6 +79,8 @@ class PreferencesRepository(private val context: Context) {
             p[Keys.FIRST_RUN] = s.firstRunDone
             p[Keys.BIRDNET] = s.birdnetUrl.trim()
             p[Keys.GB_PACK] = s.downloadGbPack
+            p[Keys.ART_STYLE] = BirdySettings.normaliseArtStyle(s.artStyle)
+            p[Keys.CLASSIC_PACK] = s.downloadClassicPack
         }
     }
 
